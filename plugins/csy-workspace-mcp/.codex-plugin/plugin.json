@@ -1,0 +1,27 @@
+{
+  "name": "csy-workspace-mcp",
+  "version": "0.4.0",
+  "description": "Operate the CSY server through persistent shell commands and original file retrieval.",
+  "author": {
+    "name": "Normalight and contributors"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "CSY Workspace MCP",
+    "shortDescription": "Persistent shell commands and files on the CSY server.",
+    "longDescription": "Execute shell commands, reuse tmux sessions, answer prompts, and retrieve original files through two MCP tools.",
+    "developerName": "CSY workspace",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Terminal"
+    ],
+    "defaultPrompt": [
+      "Inspect the CSY workspace and summarize the relevant files.",
+      "Run a safe diagnostic command in the CSY workspace.",
+      "Review a proposed change before applying it."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

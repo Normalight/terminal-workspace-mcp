@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "workspaceRoot": "..",
+  "http": {
+    "host": "127.0.0.1",
+    "port": 5679,
+    "path": "/mcp",
+    "allowedHosts": [],
+    "allowAnonymous": false,
+    "compression": {
+      "enabled": true,
+      "minBytes": 1024
+    },
+    "sessions": {
+      "max": 128,
+      "idleTtlMs": 14400000,
+      "gcIntervalMs": 300000
+    }
+  },
+  "auth": {
+    "tokenEnv": "MCP_AUTH_TOKEN"
+  },
+  "tools": {
+    "profile": "minimal",
+    "enableWrite": true,
+    "enableTerminal": true
+  },
+  "files": {
+    "maxBytes": 4194304,
+    "directMaxBytes": 1048576
+  },
+  "terminal": {
+    "shell": "/bin/bash",
+    "maxSessions": 32,
+    "maxWaitMs": 120000,
+    "maxOutputBytes": 524288
+  },
+  "jobs": {
+    "maxCount": 1000,
+    "maxRunning": 32,
+    "retentionDays": 30
+  },
+  "logs": {
+    "segmentBytes": 8388608,
+    "maxSegments": 0
+  },
+  "paths": {
+    "service": "outputs/mcp-runtime",
+    "jobs": "outputs/mcp-jobs",
+    "terminals": "outputs/mcp-terminals",
+    "audit": "outputs/mcp-runtime/http-session-audit.jsonl"
+  },
+  "relay": {
+    "host": "127.0.0.1",
+    "port": 8790
+  },
+  "client": {
+    "url": "http://127.0.0.1:5679/mcp",
+    "tokenEnv": "CSY_MCP_TOKEN"
+  },
+  "diagnostics": {
+    "tunnelUrl": "http://127.0.0.1:8791"
+  }
+}

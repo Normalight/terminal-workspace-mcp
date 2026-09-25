@@ -1,0 +1,26 @@
+# Local configuration and credentials
+mcp_server/config.local.json
+.env
+.env.*
+!.env.example
+**/*.pem
+**/*.key
+credentials.json
+
+# Runtime state and shared assets
+.cache/
+.tmp/
+.local/
+outputs/
+shared/
+**/node_modules/
+**/__pycache__/
+**/*.py[cod]
+coverage/
+*.log
+*.sock
+
+# Editors and OS metadata
+.DS_Store
+.idea/
+.vscode/

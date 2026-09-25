@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+    env:
+      npm_config_cache: ${{ github.workspace }}/.cache/npm
+      XDG_CACHE_HOME: ${{ github.workspace }}/.cache
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          set-safe-directory: false
+      - name: Prepare runtime paths
+        run: mkdir -p .tmp .cache/npm
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: mcp_server/package-lock.json
+      - name: Install tmux
+        run: |
+          if ! command -v tmux >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y tmux
+          fi
+          tmux -V
+          python3 --version
+      - name: Install dependencies
+        run: npm ci --prefix mcp_server --no-audit --no-fund
+        env:
+          TMPDIR: ${{ github.workspace }}/.tmp
+      - name: Test
+        run: node --test mcp_server/test/*.test.mjs
+        env:
+          TMPDIR: ${{ github.workspace }}/.tmp
+          TMP: ${{ github.workspace }}/.tmp
+          TEMP: ${{ github.workspace }}/.tmp
+      - name: Measure tools and check formatting
+        run: |
+          node mcp_server/scripts/measure_tools.mjs
+          git diff --check

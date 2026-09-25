@@ -1,0 +1,34 @@
+{
+  "name": "csy-workspace-mcp",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "description": "Personal remote terminal MCP with tmux sessions, durable jobs, and paged file transfers.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "start:stdio": "node src/stdio.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.1.1",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "4.4.3"
+  },
+  "license": "MIT",
+  "author": "Normalight and contributors",
+  "os": [
+    "linux"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Normalight/csy-workspace-mcp.git",
+    "directory": "mcp_server"
+  },
+  "homepage": "https://github.com/Normalight/csy-workspace-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/Normalight/csy-workspace-mcp/issues"
+  }
+}
