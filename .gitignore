@@ -13,7 +13,7 @@ credentials.json
 .local/
 outputs/
 shared/
-**/node_modules/
+**/node_modules
 **/__pycache__/
 **/*.py[cod]
 coverage/

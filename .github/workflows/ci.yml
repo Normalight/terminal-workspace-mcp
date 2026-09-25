@@ -54,3 +54,7 @@ jobs:
         run: |
           node mcp_server/scripts/measure_tools.mjs
           git diff --check
+          if git ls-files | grep -Eq '(^|/)(node_modules|config\.local\.json)(/|$)'; then
+            echo 'Dependencies or local configuration must not be tracked.'
+            exit 1
+          fi
