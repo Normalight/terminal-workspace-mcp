@@ -56,7 +56,8 @@ test('MCP clients receive completion without polling, isolated by connection, wi
   try {
     await start();
     const a = await connect(), b = await connect();
-    const command = await a.call({ command: 'while [ ! -f release ]; do sleep .02; done; printf FINISHED', cwd: f.root });
+    const terminalKey = 'integration/reconnect';
+    const command = await a.call({ terminalKey, command: 'export RETAINED=still-here; while [ ! -f release ]; do sleep .02; done; printf FINISHED', cwd: f.root });
     assert.equal(command.status, 'running'); assert(command.completionNotification.subscribed);
     // No further tools/call from A: releasing the shell triggers a pushed event.
     await writeFile(path.join(f.root, 'release'), '');
@@ -113,11 +114,14 @@ test('MCP clients receive completion without polling, isolated by connection, wi
     await a.client.close(); await b.client.close(); await stop();
     await writeFile(path.join(f.root, 'restart-release'), '');
     await start(); const recovered = await connect();
-    await recovered.call({ sessionId: restart.sessionId, commandId: restart.commandId, notifyOnCompletion: true });
+    const resumed = await recovered.call({ terminalKey, commandId: restart.commandId, notifyOnCompletion: true });
+    assert.equal(resumed.sessionId, restart.sessionId); assert(resumed.terminalReused);
     const recoveredEvent = await until(() => recovered.events.find(x => x.data.commandId === restart.commandId));
     assert.equal(recoveredEvent.data.exitCode, 0);
     const final = await recovered.call({ sessionId: restart.sessionId, commandId: restart.commandId, cursor: restart.nextCursor });
     assert.match(final.stdout, /RECOVERED/);
+    const next = await recovered.call({ terminalKey, command: 'printf "ENV=%s" "$RETAINED"', waitMs: 1000 });
+    assert.equal(next.sessionId, command.sessionId); assert.match(next.stdout, /ENV=still-here/);
   } finally {
     for (const client of clients) await client.close().catch(() => {});
     await stop();

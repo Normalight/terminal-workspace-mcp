@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reuse tmux shells across MCP connections/restarts by durable task keys; preserve lookup-only history, report closed-shell replacement, and reject commands while an interactive shell is busy.
+- Serialize terminal creation across processes and count live tmux sessions without scanning archived command histories.
+
 - Reclaim idle MCP sessions under capacity pressure, reserve concurrent handshake slots, and protect live requests/SSE listeners; shorten default idle retention to two minutes.
 - Clarify HTTP/session/terminal reuse, report whether completion listeners are connected, and test sustained fresh-client traffic plus persistent listener reuse.
 

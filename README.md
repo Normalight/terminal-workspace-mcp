@@ -65,6 +65,8 @@ Reuse the returned `sessionId`:
 
 Poll a running command with `{ "sessionId": "...", "cursor": 1234 }`, using the previous `nextCursor`. Answer a prompt with `{ "sessionId": "...", "input": "yes\n" }`, or interrupt with `{ "sessionId": "...", "key": "C-c" }`.
 
+For reuse across fresh MCP connections, set a stable `terminalKey` such as `project/build-42` on the first and subsequent calls instead of `sessionId`. Reads never create a shell. New commands can replace a closed keyed shell, reporting `terminalReused:false` and `replacedSessionId`; initialize its directory/environment again. Use distinct keys for independent tasks and retain original IDs/cursors for history. See [terminal reuse and interaction](mcp_server/README.md#execute-and-interact).
+
 `waitMs` and `maxBytes` limit the response; they do not kill a process. Terminal output merges stdout/stderr and may contain ANSI sequences. Use shell commands for editing, search, Git, and process management.
 
 Fetch a file with `get_file({"path":"result.png"})`. For larger files, start at `offset:0` and continue with `nextOffset` until `eof`. Files retain their original bytes; HTTP compression is decoded by the client.

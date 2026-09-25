@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
-import { mkdir, open, readdir, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -10,6 +10,7 @@ import { DEFAULT_SEGMENT_BYTES, readLog } from "./log-store.mjs";
 const exec = promisify(execFile);
 const ID = /^term_[a-f0-9-]{36}$/;
 const COMMAND = /^cmd_[a-f0-9-]{36}$/;
+const KEY = /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,119}$/;
 export class TerminalManager {
   constructor({ root, env = process.env, tmux = "tmux", maxSessions = 32, segmentBytes = DEFAULT_SEGMENT_BYTES, maxSegments = 0 } = {}) {
     this.root = path.resolve(root); this.socket = path.join(this.root, "tmux.sock"); this.env = env; this.tmux = tmux;
@@ -21,11 +22,14 @@ export class TerminalManager {
   async initialize() { await mkdir(this.root, { recursive: true, mode: 0o700 }); return this; }
   dir(id) { if (!ID.test(id)) throw new OperationError("invalid terminal session id", "invalid_input"); return path.join(this.root, id); }
   async locked(id, operation) {
-    return this.lock.run(id, async () => {
+    return this.fileLocked(id, path.join(this.dir(id), 'operation.lock'), operation);
+  }
+  async fileLocked(key, lockFile, operation) {
+    return this.lock.run(key, async () => {
       // Linux flock belongs to the shared open-file description: after the
       // child locks fd 3, our parent fd retains the lock until close(). This
       // serializes CLI cleanup, HTTP and stdio processes and is crash-safe.
-      const file = await open(path.join(this.dir(id), 'operation.lock'), 'a', 0o600);
+      const file = await open(lockFile, 'a', 0o600);
       try {
         await new Promise((resolve, reject) => {
           const child = spawn('flock', ['--exclusive', '--timeout', '10', '3'], { stdio: ['ignore', 'ignore', 'ignore', file.fd], env: this.env });
@@ -48,17 +52,56 @@ export class TerminalManager {
       return { alive: dead === "0", exitCode: dead === "1" && exit !== "" ? Number(exit) : null, pid: Number(pid), cwd: cwd.join("\t") };
     } catch { return { alive: false, exitCode: null, pid: null, cwd: null }; }
   }
-  async open({ cwd, name = "", env = {}, cols = 120, rows = 40, sessionId } = {}) {
+  keyFile(key) {
+    if (typeof key !== 'string' || !KEY.test(key)) throw new OperationError('terminalKey must be 1..120 ASCII letters/digits or ._:/-, starting with a letter/digit', 'invalid_input');
+    return path.join(this.root, 'keys', `${createHash('sha256').update(key).digest('hex')}.json`);
+  }
+  async liveSessionCount() {
+    try {
+      const panes = await this.run(['list-panes', '-a', '-F', '#{session_name}\t#{pane_dead}']);
+      return new Set(panes.split('\n').map(line => line.split('\t')).filter(([name, dead]) => ID.test(name) && dead === '0').map(([name]) => name)).size;
+    } catch (error) {
+      if (/no server running|Connection refused|No such file/.test(error.message)) return 0;
+      throw error;
+    }
+  }
+  async open({ cwd, resolveCwd, name = "", env = {}, cols = 120, rows = 40, sessionId, terminalKey, createIfMissing = true } = {}) {
+    if (sessionId && terminalKey !== undefined) throw new OperationError('provide sessionId or terminalKey, not both', 'invalid_input');
     if (sessionId) return this.status(sessionId);
+    const bindingFile = terminalKey === undefined ? null : this.keyFile(terminalKey);
     integer(cols, "cols", 20, 500); integer(rows, "rows", 5, 300);
-    return this.lock.run("create", async () => {
-      if ((await this.list()).filter(x => x.status === "running").length >= this.maxSessions) throw new OperationError("terminal session limit reached", "capacity");
+    return this.fileLocked('create', path.join(this.root, 'creation.lock'), async () => {
+      let previous;
+      if (bindingFile) {
+        const binding = await jsonFile(bindingFile, null);
+        if (binding) {
+          if (binding.terminalKey !== terminalKey || !ID.test(binding.sessionId)) throw new OperationError('invalid terminal key binding', 'terminal_binding_invalid');
+          previous = binding.sessionId;
+          const existing = await this.locked(previous, async () => {
+            const state = await this.status(previous);
+            if (state.owner !== this.owner || state.managerId !== this.managerId || state.terminalKey !== terminalKey) throw new OperationError('terminal key ownership mismatch', 'terminal_binding_invalid');
+            if (state.alive) {
+              const identity = await this.run(['display-message', '-p', '-t', `${previous}:0.0`, '#{session_id}\t#{@mcp_manager}\t#{@mcp_owner}']);
+              if (identity !== `${state.tmuxSessionId}\t${this.owner}\t${this.managerId}`) throw new OperationError('terminal ownership changed', 'terminal_binding_invalid');
+              await atomicJson(path.join(this.dir(previous), 'activity.json'), { lastUsedAt: new Date().toISOString() });
+            }
+            return state;
+          }).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+          if (existing && (existing.alive || !createIfMissing)) return { ...existing, reused: true };
+        }
+        if (!createIfMissing) throw new OperationError('terminalKey not found; provide a command to create it or use a saved sessionId', 'terminal_not_found');
+      }
+      if (await this.liveSessionCount() >= this.maxSessions) throw new OperationError("terminal session limit reached", "capacity");
+      if (resolveCwd) cwd = await resolveCwd();
       const id = `term_${randomUUID()}`, dir = this.dir(id);
       await mkdir(path.join(dir, "commands"), { recursive: true, mode: 0o700 });
       const rc = path.join(dir, "shell.rc"), log = path.join(dir, "terminal.log"), ready = path.join(dir, "ready");
       const logToken = randomUUID();
-      const meta = { sessionId: id, owner: this.owner, managerId: this.managerId, shellStateVersion: 1, outputProtocol: 1, name, cwd, createdAt: new Date().toISOString(), log, logs: this.logs, cols, rows };
+      const meta = { sessionId: id, owner: this.owner, managerId: this.managerId, shellStateVersion: 1, outputProtocol: 1, name, cwd, createdAt: new Date().toISOString(), log, logs: this.logs, cols, rows, ...(terminalKey === undefined ? {} : { terminalKey }) };
       await atomicJson(path.join(dir, "meta.json"), meta);
+      // Persist the binding before shell launch. A service crash cannot leave a
+      // live keyed shell undiscoverable to its next caller.
+      if (bindingFile) await atomicJson(bindingFile, { terminalKey, sessionId: id });
       await atomicWrite(rc, [
         "HISTFILE=" + quote(path.join(dir, "history")),
         "PS1='mcp:\\w\\$ '", "unset PROMPT_COMMAND", "set +o history",
@@ -91,7 +134,7 @@ export class TerminalManager {
         await this.run(["wait-for", "-S", gate]);
         for (let i = 0; i < 100; i++) { if (await stat(ready).then(() => true, () => false)) break; await delay(20); }
         if (!await stat(ready).then(() => true, () => false)) throw new OperationError("terminal shell did not become ready", "startup_timeout");
-        return this.status(id);
+        return { ...await this.status(id), reused: false, ...(previous ? { replacedSessionId: previous } : {}) };
       } catch (error) { await this.run(["kill-session", "-t", id]).catch(() => {}); await atomicJson(path.join(dir, "closed.json"), { error: error.message, closedAt: new Date().toISOString() }); throw error; }
     });
   }
@@ -145,6 +188,17 @@ export class TerminalManager {
     const commandId = await this.locked(id, async () => {
       const state = await this.status(id); if (!state.alive) throw new OperationError("terminal is closed", "terminal_closed");
       if (state.activeCommandId && (await this.commandStatus(id, state.activeCommandId)).status === "running") throw new OperationError("a tracked command is still running; send interactive input or poll this session", "terminal_busy");
+      if (state.shellStateVersion === 1) {
+        // Raw input/direct tmux use can be busy without a tracked command.
+        // Allow the prompt hook to finish publishing ready after its log marker.
+        let ready = false;
+        for (let i = 0; i < 6; i++) {
+          ready = await readFile(path.join(this.dir(id), 'ready'), 'utf8').then(value => value === 'ready', () => false);
+          if (ready) break;
+          await delay(20);
+        }
+        if (!ready) throw new OperationError('shell is not at a prompt; use input/key for the current interaction', 'terminal_busy');
+      }
       const cid = `cmd_${randomUUID()}`, dir = path.join(this.dir(id), "commands"), script = path.join(dir, `${cid}.sh`);
       await atomicJson(path.join(this.dir(id), 'activity.json'), { lastUsedAt: new Date().toISOString() });
       const page = await readLog(state.log, { maxBytes: 4, segmentBytes: state.logs.segmentBytes, final: !state.alive });

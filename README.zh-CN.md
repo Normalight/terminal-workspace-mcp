@@ -58,6 +58,10 @@ python3 -B mcp_server/scripts/service.py stop
 
 第一次调用 `execute_command` 传入 `command`；后续复用返回的 `sessionId`，即可保留 `cd`、环境变量和环境激活状态。
 
+频繁重连的调用方也可从首次命令起指定固定任务键，例如 `{terminalKey:"project/build-42", command:"pwd", cwd:"/绝对项目路径"}`。后续传同一个 `terminalKey` 即可找回原 tmux，跨 MCP 连接和服务重启保留目录、环境及进程；它与 `sessionId` 二选一，不同任务使用不同键。仅查询时不传 `command`，不会新建终端。忙碌终端拒绝第二条命令，可继续读取或发送交互输入。
+
+返回 `terminalReused` 表明是否复用。终端关闭或闲置回收后，读操作仍读取原历史；只有新命令才可创建替代 shell，并返回 `replacedSessionId`，此时应显式初始化工作目录和环境。每条命令仍需保存原始 `sessionId`、`commandId` 和游标，以便任务键指向新终端后读取旧结果。既不传 `sessionId` 也不传 `terminalKey` 的新命令保持新建终端的行为。
+
 - 执行下一条命令：`{sessionId, command}`。
 - 续读输出：`{sessionId, cursor: 上次的nextCursor}`。
 - 回答交互提示：`{sessionId, input: "yes\n"}`。

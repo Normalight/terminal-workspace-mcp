@@ -89,6 +89,18 @@ Reuse that ID for subsequent commands to preserve `cd`, environment activation, 
 {"sessionId":"term_...","command":"printf '%s\\n' \"$MODE\"; git status --short","waitMs":1000}
 ```
 
+For callers that reconnect frequently, choose one stable `terminalKey` per task from its first command:
+
+```json
+{"terminalKey":"project/build-42","command":"export MODE=dev; pwd","cwd":"/absolute/project","waitMs":1000}
+```
+
+Subsequent calls can use the same key instead of `sessionId`, including read/subscribe calls without `command`. The key persists across MCP connections and server restarts and returns the same tmux shell, preserving its directory and environment. `cwd` and creation options apply only when creating a shell. Provide either `sessionId` or `terminalKey`, never both. Keys are case-sensitive, 1–120 ASCII letters/digits or `._:/-`, beginning with a letter/digit, and scoped to the configured terminal root. Use separate keys for independent tasks; omitting both selectors creates a fresh terminal.
+
+`terminalReused` identifies reuse. Read-only key lookups never create a terminal; unknown keys return `terminal_not_found`. Reading a closed keyed terminal retains its history. A new command may replace a closed/reclaimed keyed shell, returning `terminalReused:false` and `replacedSessionId`; its old environment is gone, so initialize the new command explicitly. Keep the original `sessionId` with each `commandId`/cursor to retrieve that shell's earlier results even after its key has moved to a replacement. Restoring monitoring never requires re-running a command.
+
+Concurrent key lookups/creation use cross-process locks; one key creates only one shell and capacity is checked against live tmux sessions. A busy keyed shell remains the same shell and rejects another command with `terminal_busy`; use read/input/key to continue its current work.
+
 `waitMs` (0–30000 ms) bounds this call's wait. `maxBytes` (4–1048576, default 65536) bounds the returned output page. Neither ends a command. A response includes `status`, `exitCode`, `sessionId`, `commandId`, `stdout`, `nextCursor`, and truncation/wait indicators. When a command is still running, or output remains unread, continue:
 
 ```json
