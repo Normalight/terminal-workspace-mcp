@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Push per-connection command completion notices over MCP logging/SSE or stdio, with bounded subscriptions, opt-out, reconnect re-subscription, and a runnable client example.
+- Document event handling, polling fallback, command IDs, and output-drain recovery in tools, server instructions, and operator guidance.
+
 - Confirm terminal completion after preceding PTY output is written, and refresh output when a command finishes during polling.
 - Keep a verified process-group supervisor alive so cancellation and deadlines can terminate descendants after their shell exits.
 - Require a current Bash prompt marker for idle reclamation, protecting interactive builtins. Older shells without this hook remain protected from idle cleanup.

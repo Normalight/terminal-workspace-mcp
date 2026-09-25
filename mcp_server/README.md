@@ -126,7 +126,40 @@ Close only sessions belonging to the completed task when their processes are no 
 
 ### Long tasks
 
-Start once, then poll the returned `sessionId` with the previous `nextCursor`, without resending `command`. Use `waitMs:10000` to `30000` when output is sparse. Waiting expiry, output truncation, or a dropped connection does not mean execution stopped. Inspect the existing session before deciding whether a retry is needed. Report completion only after checking `status`, `exitCode`, and remaining output. Save the session ID, command ID, cursor, and absolute log/artifact paths for handoff. Future monitoring needs an active client or separately configured scheduler.
+Start a command once and save `sessionId`, `commandId`, and `nextCursor`. A command returned as `running` automatically subscribes **the calling MCP connection** to a completion event. The server advertises `logging` and emits the standard MCP `notifications/message` with `level: "notice"`, `logger: "terminal-workspace.completion"`, and structured `data`:
+
+```json
+{
+  "event": "command_completed",
+  "notificationId": "term_...:cmd_...",
+  "sessionId": "term_...",
+  "commandId": "cmd_...",
+  "status": "succeeded",
+  "exitCode": 0,
+  "signal": null,
+  "startedAt": "...",
+  "finishedAt": "...",
+  "startCursor": 100,
+  "outputEndCursor": 200
+}
+```
+
+The notification carries status and identifiers; retrieve output using `execute_command({sessionId, commandId, cursor: nextCursor, waitMs: 0})` without `command`, draining remaining pages. Keep commands that represent long work in the foreground: a shell command ending in `&` finishes when the shell returns, not when its detached work finishes. In the legacy profile, job notifications contain `jobId`/`commandId`; use `get_job_status` and `get_job_logs` for final state and output.
+
+- **Client integration:** register a logging notification handler before starting work; keep Streamable HTTP GET SSE or stdio open. Accept `notice` messages (`logging/setLevel` to `notice` or a lower threshold). The SDK 1.x Streamable HTTP client opens GET automatically. These are structured logging events, not the experimental MCP Tasks API. See [MCP logging](https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/logging) and the [SDK v1 transport guide](https://ts.sdk.modelcontextprotocol.io/server).
+- **Controls:** `notifyOnCompletion: false` disables/removes that command's subscription. Explicit `true` also subscribes to an already completed command. By default, commands finished within the initial wait are simply returned, without an extra event. Ordinary output reads do not change subscriptions.
+- **Recovery:** pending events wait while this HTTP session lacks GET SSE. Same-session reconnection resumes delivery. After service restart, HTTP-session expiry, or a new connection, initialize again and call `{sessionId, commandId, notifyOnCompletion: true, waitMs: 0}` to subscribe to persisted command state. Legacy clients use `get_terminal_command` or `get_job_status` with the same flag. Never rerun the command to restore monitoring.
+- **Delivery limits:** subscriptions belong to a connection, not a broadcast channel. A connection retains up to 256 pending subscriptions and a 2,048-entry sent-ID deduplication window; capacity failures explicitly return `completionNotification.reason: "subscription_limit"` and `fallback: "poll"`. Network receipt is not acknowledged, so clients should deduplicate `notificationId` and reconcile saved IDs after reconnecting. Server restart discards subscriptions, not task results. Logging thresholds above `notice` defer delivery until the client allows it.
+- **Server lifecycle:** a demand-started monitor checks subscribed commands about every 500 ms while a listener exists. Terminal completion uses the persisted output-drain acknowledgement. Completed states are cached during retries. The monitor stops when empty or when the MCP session closes; active SSE listeners are protected from idle session GC. SSE is uncompressed, with SDK keep-alives and proxy-buffering disabled. No commands or output are included in notification payloads.
+- **Fallback:** a client must handle events to act on them. Receiving a notification does not itself wake an offline application or schedule another model turn. If the host does not expose notification handlers, continue polling with `{sessionId, cursor: nextCursor, waitMs: 10000}` (up to 30000 ms). Waiting expiry, output truncation and a dropped connection do not stop execution. Always verify the final status/exit code and read remaining output before reporting completion.
+
+A runnable SDK example is [examples/completion-client.mjs](examples/completion-client.mjs). It waits for a pushed event without polling and then fetches the remaining output:
+
+```bash
+node mcp_server/examples/completion-client.mjs 'sleep 5; printf finished'
+```
+
+It uses the configured local HTTP endpoint and authentication; set `MCP_NOTIFICATION_URL` to exercise a relay/tunnel endpoint instead. Save the IDs it prints to re-subscribe if interrupted.
 
 ### Identify and reclaim managed tmux sessions
 

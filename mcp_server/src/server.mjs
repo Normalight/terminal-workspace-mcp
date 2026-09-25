@@ -11,6 +11,7 @@ import { TerminalManager } from "./terminal-manager.mjs";
 import { TerminalAdmin } from "./terminal-admin.mjs";
 import { childEnvironment } from "./runtime.mjs";
 import { registerTools } from "./tools.mjs";
+import { CompletionNotifications } from "./completion-notifications.mjs";
 import { execFileSync } from "node:child_process";
 import { LogWriter } from "./log-store.mjs";
 import { Workspace, WorkspaceError } from "./workspace.mjs";
@@ -94,9 +95,20 @@ export function createMcpServer() {
     name: "terminal-workspace",
     version,
   }, {
-    instructions: `Personal remote terminal. Prefer absolute paths on every call; use an absolute cwd for new sessions and explicit absolute paths or cd for reused ones. Start each task once; retain sessionId and nextCursor. While status=running, poll with sessionId/cursor, no command, waitMs=10000..30000. Waiting/output limits do not stop execution or justify rerunning. Check status/exitCode and drain output before reporting completion. Save IDs/cursors/log/artifact paths for handoff; future monitoring needs an active client. Idle shells expire after ${settings.terminal.idleTtlMs}ms (0 disables idle expiry); running commands, child processes, attached clients and @mcp_keep=1 sessions are protected. Use node "$MCP_TERMINAL_ADMIN" list or cleanup (--apply to reclaim); logs remain. Prefer absolute paths for get_file. Use input or key=C-c for interaction; command=exit closes a finished shell after checking background jobs.`,
+    capabilities: { logging: {} },
+    instructions: `Personal remote terminal. Prefer absolute paths on every call; use an absolute cwd for new sessions and explicit absolute paths or cd for reused ones. Start each task once; retain sessionId and nextCursor. Commands returned as running subscribe to completion notices via notifications/message (logger=terminal-workspace.completion, level=notice). Keep GET SSE or stdio listening; on data.event=command_completed, verify status/exitCode and fetch remaining output with sessionId/commandId/cursor and no command. If notifications are unsupported, poll with sessionId/cursor, waitMs=10000..30000. Use notifyOnCompletion=false to opt out; after a new MCP connection, send sessionId/commandId and notifyOnCompletion=true to re-subscribe. Waiting/output limits do not stop execution or justify rerunning. Check status/exitCode and drain output before reporting completion. Save IDs/cursors/log/artifact paths for handoff; notification delivery requires an active listening client and does not by itself resume a model turn. Idle shells expire after ${settings.terminal.idleTtlMs}ms (0 disables idle expiry); running commands, child processes, attached clients and @mcp_keep=1 sessions are protected. Use node "$MCP_TERMINAL_ADMIN" list or cleanup (--apply to reclaim); logs remain. Prefer absolute paths for get_file. Use input or key=C-c for interaction; command=exit closes a finished shell after checking background jobs.`,
   });
-  registerTools(server, { workspace, executor: localExecutor, jobs: jobManager, terminals: terminalManager,
+  const completions = new CompletionNotifications({ terminals: terminalManager, jobs: jobManager,
+    ready: () => !!server.server.transport && (server.server.transport.notificationStreamOpen ?? true),
+    send: async params => {
+      const id = server.server.transport?.sessionId;
+      if (server.server.isMessageIgnored(params.level, id)) return false;
+      await server.sendLoggingMessage(params, id);
+      return true;
+    },
+  });
+  server.server.onclose = () => completions.close();
+  registerTools(server, { workspace, executor: localExecutor, jobs: jobManager, terminals: terminalManager, completions,
     config: { enableTerminal, enableWrite, directFileMaxBytes, childEnv, version, toolProfile },
     diagnostics: async () => ({ version, revision, toolCount, toolProfile, workspace: workspace.root, writesEnabled: enableWrite, terminalEnabled: enableTerminal, sessions: sessionStats(), counters: runtimeCounters, auditDropped, jobs: await jobManager.list({ limit: 10 }), limits: { maxSessions, directFileMaxBytes, ...logsConfig } }),
   });
@@ -338,7 +350,7 @@ if (process.env.MCP_NO_HTTP !== "1") {
     const now = Date.now();
     for (const [id, session] of sessions.entries()) {
       const idleMs = now - (session.lastActiveAt ?? session.createdAt ?? now);
-      if ((session.inflight ?? 0) === 0 && idleMs >= sessionIdleTtlMs) {
+      if ((session.inflight ?? 0) === 0 && !session.transport.notificationStreamOpen && idleMs >= sessionIdleTtlMs) {
         sessions.delete(id);
         runtimeCounters.sessionsExpired += 1;
         void session.transport.close().catch(() => {});

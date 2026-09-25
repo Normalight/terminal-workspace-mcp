@@ -49,7 +49,7 @@ ChatGPT connects to the running service through a tunnel or reachable HTTPS endp
 
 ## Use the two tools
 
-Prefer absolute paths on every call. Use an absolute `cwd` for new sessions; on reused sessions, use absolute operands or explicitly change directory. For long tasks, start once and poll with `sessionId`/`nextCursor` and a 10–30 second wait. Check the final status and exit code before reporting completion.
+Prefer absolute paths on every call. Use an absolute `cwd` for new sessions; on reused sessions, use absolute operands or explicitly change directory. For long tasks, start once and listen for the completion notification on the calling MCP connection; fetch remaining output using saved IDs/cursors. Clients without notification handling can poll with `sessionId`/`nextCursor` and a 10–30 second wait. See [completion notifications and recovery](mcp_server/README.md#long-tasks). Check the final status and exit code before reporting completion.
 
 Start a terminal:
 

@@ -6,6 +6,8 @@ const modifying = { readOnlyHint: false, destructiveHint: true, openWorldHint: t
 const object = z.object({}).passthrough();
 const string = z.string();
 const maxBytes = z.number().int().min(4).max(1048576).default(65536);
+const notifyOnCompletion = z.boolean().optional().describe("Subscribe to a completion notification on this MCP connection. Defaults on for commands returned as running; false cancels, true also re-subscribes using saved IDs. Requires a listening client.");
+const commandId = string.regex(/^cmd_[a-f0-9-]{36}$/);
 const sessionId = string.regex(/^term_[a-f0-9-]{36}$/);
 export function result(value, summary) {
   const serialized = JSON.stringify(value);
@@ -33,11 +35,15 @@ function readonlyCommand(command) {
     throw new OperationError("command is not a read-only query; use execute_command", "read_only_policy_denied");
   }).join(" && ");
 }
-export function registerTools(server, { workspace: w, executor, jobs, terminals: t, config, diagnostics }) {
+export function registerTools(server, { workspace: w, executor, jobs, terminals: t, completions, config, diagnostics }) {
   const definitions = new Map();
   const define = (name, spec, callback) => definitions.set(name, { spec, callback });
   const register = (name, description, schema, run, annotations = readOnly) => define(name, { title: name.replaceAll("_", " "), description, inputSchema: schema, outputSchema: object, annotations }, async (args, extra) => {
-    try { return result(await run(args, extra)); } catch (error) { return errorResult(error); }
+    try {
+      const value = await run(args, extra);
+      const observed = ['execute_command', 'run_terminal', 'execute_readonly_command', 'start_job', 'execute_in_terminal', 'get_job_status', 'get_terminal_command'].includes(name);
+      return result(observed && completions ? completions.observe(value, args.notifyOnCompletion, !name.startsWith('get_')) : value);
+    } catch (error) { return errorResult(error); }
   });
   const terminal = fn => async (...args) => { if (!config.enableTerminal) throw new OperationError("set MCP_ENABLE_TERMINAL=1 to enable execution", "terminal_disabled"); return fn(...args); };
   const cwd = async value => { const target = await w.resolve(value ?? "."); const info = await w.describe(target.absolute); if (info.type !== "directory") throw new OperationError("cwd is not a directory", "not_a_directory"); return target; };
@@ -67,7 +73,7 @@ export function registerTools(server, { workspace: w, executor, jobs, terminals:
   register("search_text", "Search incrementally in a cancellable worker with time, file-count, and total-output budgets. Set exclude=[] to include normally skipped data/cache directories.", { query: string.min(1).max(4096), path: string.default("."), regex: z.boolean().default(false), includeHidden: z.boolean().default(false), maxResults: z.number().int().min(1).max(1000).default(100), maxBytes: z.number().int().min(1024).max(1048576).default(262144), maxFiles: z.number().int().min(1).max(100000).default(10000), timeoutMs: z.number().int().min(10).max(30000).default(5000), exclude: z.array(string).optional() }, (a, extra) => w.searchText(a.query, { ...a, relativePath: a.path, signal: extra.signal }));
   register("write_file", "Create, replace, or append UTF-8 text using account permissions. Supports atomic replacement and a whole-file expectedSha256 conflict check.", { path: string, content: string, mode: z.enum(["create", "overwrite", "append"]).default("overwrite"), expectedSha256: string.regex(/^[a-f0-9]{64}$/).optional() }, a => w.writeText(a.path, a.content, a), modifying);
   register("replace_in_file", "Replace exact text with serialized conflict checking and optional dry-run preview.", { path: string, find: string.min(1), replace: string, maxReplacements: z.number().int().min(1).max(1000).default(1), dryRun: z.boolean().default(true), expectedSha256: string.regex(/^[a-f0-9]{64}$/).optional() }, a => w.replaceText(a.path, a.find, a.replace, a), modifying);
-  const input = { command: string.min(1).max(20000), cwd: string.default("."), timeoutMs: z.number().int().min(0).max(120000).default(30000), waitMs: z.number().int().min(0).max(120000).optional(), executionTimeoutMs: z.number().int().min(0).max(2147483647).default(0), maxOutputBytes: z.number().int().min(1024).max(2097152).default(262144) };
+  const input = { notifyOnCompletion, command: string.min(1).max(20000), cwd: string.default("."), timeoutMs: z.number().int().min(0).max(120000).default(30000), waitMs: z.number().int().min(0).max(120000).optional(), executionTimeoutMs: z.number().int().min(0).max(2147483647).default(0), maxOutputBytes: z.number().int().min(1024).max(2097152).default(262144) };
   const execute = terminal(async (a, tool) => { const target = await cwd(a.cwd); return executor.execute({ ...a, cwd: target.absolute, cwdLabel: target.relative, tool, env: config.childEnv }); });
   for (const name of ["execute_command", "run_terminal"]) register(name, "Execute a command as a durable job. timeoutMs/waitMs only bound this call's wait; output truncation never stops execution. Returns jobId and cursors. Set executionTimeoutMs for an explicit process deadline. Use tmux terminal tools for interactive state.", input, a => execute(a, name), modifying);
   register("execute_readonly_command", "Execute a fixed read-only query (pwd/ls/cat/uname/id/whoami or limited git queries). Use execute_command for general shell commands.", input, a => execute({ ...a, command: readonlyCommand(a.command) }, "execute_readonly_command"));
@@ -77,16 +83,16 @@ export function registerTools(server, { workspace: w, executor, jobs, terminals:
     const output = await new Promise((resolve, reject) => execFile("/usr/bin/git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--short", "--branch"], { cwd: target.absolute, timeout: 10000, maxBuffer: 1048576 }, (error, stdout) => error ? reject(error) : resolve(stdout)));
     const [branch, ...changes] = output.trimEnd().split("\n"); return { branch, changes };
   });
-  register("start_job", "Start a durable non-interactive job and return immediately. Jobs survive MCP reconnects and service restarts.", { command: input.command, cwd: input.cwd, executionTimeoutMs: input.executionTimeoutMs }, terminal(async a => { const target = await cwd(a.cwd); return jobs.start({ ...a, cwd: target.absolute, cwdLabel: target.relative, env: config.childEnv }); }), modifying);
-  register("get_job_status", "Read persisted job state and final exit code.", { jobId: string }, a => jobs.status(a.jobId));
+  register("start_job", "Start a durable non-interactive job and return immediately. Jobs survive MCP reconnects and service restarts.", { command: input.command, cwd: input.cwd, executionTimeoutMs: input.executionTimeoutMs, notifyOnCompletion }, terminal(async a => { const target = await cwd(a.cwd); return jobs.start({ ...a, cwd: target.absolute, cwdLabel: target.relative, env: config.childEnv }); }), modifying);
+  register("get_job_status", "Read persisted job state and final exit code. Set notifyOnCompletion=true to subscribe on this connection.", { jobId: string, notifyOnCompletion }, a => jobs.status(a.jobId));
   register("get_job_logs", "Read original output with separate stdout/stderr cursors; omit cursors for tails. Rotated-log retention gaps are reported in droppedBytes.", { jobId: string, stream: z.enum(["stdout", "stderr", "both"]).default("both"), maxBytes, stdoutCursor: z.number().int().min(0).optional(), stderrCursor: z.number().int().min(0).optional() }, a => jobs.logs(a.jobId, a));
   register("list_jobs", "List recent jobs, including completed and cancelled jobs.", { limit: z.number().int().min(1).max(200).default(50) }, async a => ({ jobs: await jobs.list(a) }));
   register("stop_job", "Cancel a durable job, waiting for confirmation. Sends TERM followed by KILL after a grace period; force requests immediate KILL.", { jobId: string, force: z.boolean().default(false), waitMs: z.number().int().min(0).max(30000).default(2500) }, terminal(a => jobs.stop(a.jobId, a)), modifying);
   register("cleanup_jobs", "Remove completed job histories according to age/count retention. Running jobs are preserved. dryRun previews the selection.", { retainCount: z.number().int().min(0).max(100000).default(1000), dryRun: z.boolean().default(true) }, terminal(a => jobs.cleanup(a)), modifying);
   register("open_terminal", "Create a persistent tmux Bash PTY or resume an existing sessionId. State survives MCP service restarts. env extends the server environment for the new session.", { sessionId: sessionId.optional(), cwd: string.default("."), name: string.max(200).default(""), env: z.record(string, string).default({}), cols: z.number().int().min(20).max(500).default(120), rows: z.number().int().min(5).max(300).default(40) }, terminal(async a => t.open({ ...a, cwd: (await cwd(a.cwd)).absolute })), modifying);
   register("list_terminals", "List managed tmux terminal sessions with their current directories.", {}, async () => ({ terminals: await t.list() }));
-  register("execute_in_terminal", "Run a tracked command in an existing tmux shell, preserving cd/export/activation. Returns commandId, status, exit code, and output cursor. Use write_terminal to answer prompts.", { sessionId, command: input.command, waitMs: z.number().int().min(0).max(30000).default(1000), maxBytes }, terminal(a => t.execute(a.sessionId, a)), modifying);
-  register("get_terminal_command", "Read completion and exit code for a tracked terminal command.", { sessionId, commandId: string }, a => t.commandStatus(a.sessionId, a.commandId));
+  register("execute_in_terminal", "Run a tracked command in an existing tmux shell, preserving cd/export/activation. Returns commandId, status, exit code, and output cursor. Use write_terminal to answer prompts.", { sessionId, notifyOnCompletion, command: input.command, waitMs: z.number().int().min(0).max(30000).default(1000), maxBytes }, terminal(a => t.execute(a.sessionId, a)), modifying);
+  register("get_terminal_command", "Read completion and exit code for a tracked terminal command. Set notifyOnCompletion=true to subscribe on this connection.", { sessionId, commandId, notifyOnCompletion }, a => t.commandStatus(a.sessionId, a.commandId));
   register("write_terminal", "Send literal input and optional Enter, or a control key such as C-c. Does not open another shell.", { sessionId, input: string.max(65536).default(""), enter: z.boolean().default(false), key: z.enum(["C-c", "C-d", "C-z", "Enter", "Escape", "Tab", "Up", "Down"]).optional() }, terminal(a => t.write(a.sessionId, a)), modifying);
   register("read_terminal", "Read original PTY output incrementally using nextCursor. Output may contain terminal ANSI sequences.", { sessionId, cursor: z.number().int().min(0).optional(), maxBytes, waitMs: z.number().int().min(0).max(30000).default(0) }, a => t.read(a.sessionId, a));
   register("resize_terminal", "Resize the terminal PTY.", { sessionId, cols: z.number().int().min(20).max(500), rows: z.number().int().min(5).max(300) }, terminal(a => t.resize(a.sessionId, a.cols, a.rows)), modifying);
@@ -100,13 +106,14 @@ export function registerTools(server, { workspace: w, executor, jobs, terminals:
   server.registerTool("get_file", getFile.spec, getFile.callback);
   server.registerTool("execute_command", {
     title: "Execute in persistent terminal",
-    description: "Run shell commands in persistent tmux. Prefer absolute paths on every call; cwd only sets a new session, so use explicit paths or cd for reused sessions. Start once, then keep sessionId and nextCursor. While status=running, poll with sessionId/cursor and no command; use waitMs=10000..30000 for long waits. waitMs/maxBytes only bound this response: never rerun a task because waiting expired. Check status/exitCode and drain remaining output before reporting completion. Reuse sessionId for cwd/env; cwd applies only to new sessions. Use input for prompts or key=C-c to interrupt. Output is original merged PTY stdout/stderr with ANSI sequences. Use shell for files, search, Git and processes. Inspect owned sessions with node \"$MCP_TERMINAL_ADMIN\" list; cleanup previews reclamation, --apply retains logs. Idle sessions may expire; running tasks are protected. command=exit closes a finished shell; check background jobs first. Save IDs/cursors/artifact paths for handoff.",
-    inputSchema: { command: string.max(20000).optional(), sessionId: sessionId.optional(), cwd: string.optional(), input: string.max(65536).optional(), key: z.enum(["C-c", "C-d", "C-z", "Enter", "Escape", "Tab"]).optional(), cursor: z.number().int().min(0).optional(), waitMs: z.number().int().min(0).max(30000).default(1000), maxBytes },
+    description: "Run shell commands in persistent tmux. Start once; save sessionId, commandId and nextCursor. Commands returned as running automatically subscribe this MCP connection to notifications/message (logger=terminal-workspace.completion, level=notice, data.event=command_completed). Keep HTTP GET SSE or stdio listening; the event carries IDs, status, exitCode and outputEndCursor. Then read with sessionId, commandId and cursor=previous nextCursor, no command, until output is drained. notifyOnCompletion=false disables the subscription; true re-subscribes after reconnect, including already finished commands. Notifications do not wake an offline client or guarantee model continuation. If your client cannot consume events, poll with sessionId/cursor, waitMs=10000..30000. waitMs/maxBytes limit this response only; expiry never means the command stopped and is never a reason to rerun it. cwd only initializes new sessions; use absolute paths or cd for reused sessions. Use input for prompts, key=C-c to interrupt; PTY output merges stdout/stderr and may contain ANSI. Use shell for files/search/Git; get_file fetches artifacts. Inspect/clean owned sessions with node \"$MCP_TERMINAL_ADMIN\" list or cleanup --apply (logs retained); running tasks are protected. command=exit closes an idle shell after checking background jobs.",
+    inputSchema: { command: string.max(20000).optional(), sessionId: sessionId.optional(), commandId: commandId.optional().describe("Read/subscribe to a specific saved command; requires sessionId and no command/input/key."), notifyOnCompletion, cwd: string.optional(), input: string.max(65536).optional(), key: z.enum(["C-c", "C-d", "C-z", "Enter", "Escape", "Tab"]).optional(), cursor: z.number().int().min(0).optional(), waitMs: z.number().int().min(0).max(30000).default(1000), maxBytes },
     outputSchema: object, annotations: modifying,
   }, async (a) => {
     try {
       if (!config.enableTerminal) throw new OperationError("set MCP_ENABLE_TERMINAL=1 to enable execution", "terminal_disabled");
       const began = Date.now();
+      if (a.commandId && (!a.sessionId || a.command !== undefined || a.input !== undefined || a.key)) throw new OperationError("commandId requires sessionId and a read/subscribe call without command/input/key", "invalid_input");
       if (a.command !== undefined && (a.input !== undefined || a.key)) throw new OperationError("send a command or interactive input in separate calls", "invalid_input");
       if (!a.sessionId && (!a.command?.trim())) throw new OperationError("provide command for a new session, or sessionId to resume", "invalid_input");
       const id = a.sessionId ?? (await t.open({ cwd: (await cwd(a.cwd)).absolute })).sessionId;
@@ -118,13 +125,14 @@ export function registerTools(server, { workspace: w, executor, jobs, terminals:
         if (a.input !== undefined || a.key) await t.write(id, { input: a.input ?? "", key: a.key });
         page = await t.read(id, { cursor: a.cursor, maxBytes: a.maxBytes, waitMs: a.waitMs });
         const state = await t.status(id);
-        tracked = state.activeCommandId ? await t.commandStatus(id, state.activeCommandId) : { status: state.alive ? "idle" : "terminal_closed", exitCode: null };
+        tracked = (a.commandId ?? state.activeCommandId) ? await t.commandStatus(id, a.commandId ?? state.activeCommandId) : { status: state.alive ? "idle" : "terminal_closed", exitCode: null };
         // Completion can arrive while read() is returning an earlier snapshot.
         // Refresh from that same cursor after the logger acknowledges completion.
         if (tracked.status !== 'running') page = await t.read(id, { cursor: page.cursor, maxBytes: a.maxBytes });
       }
       const state = await t.status(id);
-      return result({ ...tracked, sessionId: id, cwd: state.cwd, stdout: page.content, stderr: "", nextCursor: page.nextCursor, endCursor: page.endCursor, earliestCursor: page.earliestCursor, droppedBytes: page.droppedBytes, outputTruncated: page.truncated, waitingExpired: tracked.status === "running", durationMs: Date.now() - began });
+      const value = { ...tracked, sessionId: id, cwd: state.cwd, stdout: page.content, stderr: "", nextCursor: page.nextCursor, endCursor: page.endCursor, earliestCursor: page.earliestCursor, droppedBytes: page.droppedBytes, outputTruncated: page.truncated, waitingExpired: tracked.status === "running", durationMs: Date.now() - began };
+      return result(completions ? completions.observe(value, a.notifyOnCompletion, !!a.command?.trim()) : value);
     } catch (error) { return errorResult(error); }
   });
 }

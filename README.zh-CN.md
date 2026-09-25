@@ -70,7 +70,11 @@ python3 -B mcp_server/scripts/service.py stop
 
 ## 长任务与会话回收
 
-长任务只启动一次。返回 `status: running` 后，用 `sessionId` 和上次的 `nextCursor` 继续轮询，不再传 `command`；输出稀疏时设置 `waitMs:10000` 至 `30000`。等待到期或连接中断不等于任务失败，不要直接重跑。完成前检查最终 `status`、`exitCode` 并读完剩余输出；交接时保存会话 ID、游标和绝对日志/产物路径。会话结束后继续监控需要客户端或另行配置的调度器。
+长任务只启动一次。返回 `status: running` 后，当前 MCP 连接会自动订阅完成通知。调用方保持 GET SSE 或 stdio 监听，服务端通过 `notifications/message` 推送 `logger: terminal-workspace.completion`、`level: notice`、`data.event: command_completed`，包含任务标识、状态、退出码及终端输出结束游标。收到后用保存的 `sessionId`、`commandId` 和 `nextCursor` 续读剩余输出，不再传 `command`。
+
+`notifyOnCompletion:false` 取消该命令的通知；重连新 MCP 会话后传 `{sessionId, commandId, notifyOnCompletion:true, waitMs:0}` 重新订阅，已完成的任务也会补发状态。运行结果持久保存，通知订阅随 MCP 连接管理。短时 GET 断线期间保留待发通知；服务重启后需重新订阅。任务应在前台执行，命令末尾的 `&` 只表示 shell 已完成启动后台进程。
+
+调用方必须处理通知，并允许 `notice` 级日志；服务端无法单方面让客户端或模型自动开始下一轮。不支持事件的客户端继续使用 `sessionId` 和 `nextCursor` 轮询，`waitMs:10000` 至 `30000`。等待到期或连接中断不等于任务失败，不要直接重跑。详见[接入机制与限制](mcp_server/README.md#long-tasks)和[可运行的调用方示例](mcp_server/examples/completion-client.mjs)。
 
 默认每 30 秒检查一次，回收已退出会话及空闲超过 5 分钟的 shell。正在执行命令、有后台子进程、有人连接、手动增加窗口/分屏或标记保留的会话会跳过，日志和文件保留。回收后 shell 的目录和环境变量消失，因此独立操作应明确路径。
 

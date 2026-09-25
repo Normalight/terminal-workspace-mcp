@@ -51,10 +51,18 @@ export async function compressJsonResponse(request, response, { enabled = true, 
 // Use the SDK's public web-standard transport and the same Node adapter used by
 // its built-in Node transport. This adds encoding without patching SDK internals.
 export class HttpTransport extends WebStandardStreamableHTTPServerTransport {
-  constructor(options, compression) { super(options); this.compression = compression; }
+  constructor(options, compression) { super(options); this.compression = compression; this.notificationStreamOpen = false; }
   async handleNodeRequest(incoming, outgoing, parsedBody) {
     const handler = getRequestListener(async request => {
       const response = await super.handleRequest(request, { authInfo: incoming.auth, parsedBody });
+      if (request.method === 'GET' && response.status === 200 && response.headers.get('content-type')?.startsWith('text/event-stream')) {
+        const stream = {};
+        this.notificationStream = stream;
+        this.notificationStreamOpen = !outgoing.destroyed;
+        outgoing.once('close', () => {
+          if (this.notificationStream === stream) this.notificationStreamOpen = false;
+        });
+      }
       return compressJsonResponse(request, response, {
         ...this.compression,
         onResult: stats => { outgoing.compressionStats = stats; this.compression?.onResult?.(stats); },
