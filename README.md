@@ -1,4 +1,4 @@
-# CSY Workspace MCP
+# Terminal Workspace MCP
 
 [中文说明](README.zh-CN.md) · [Operator guide](mcp_server/README.md) · [MIT license](LICENSE)
 
@@ -24,20 +24,20 @@ The implementation uses Linux `/proc` for process identity. macOS and native Win
 ## Quick start
 
 ```bash
-git clone https://github.com/Normalight/csy-workspace-mcp.git
-cd csy-workspace-mcp
+git clone https://github.com/Normalight/terminal-workspace-mcp.git
+cd terminal-workspace-mcp
 mkdir -p .tmp .cache/npm
 npm_config_cache="$PWD/.cache/npm" npm ci --prefix mcp_server
 
 # Generate one token and use the same value in your MCP client.
 export MCP_AUTH_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')"
-export CSY_MCP_TOKEN="$MCP_AUTH_TOKEN"
+export TERMINAL_MCP_TOKEN="$MCP_AUTH_TOKEN"
 node mcp_server/src/server.mjs
 ```
 
 The default endpoint is `http://127.0.0.1:5679/mcp`. The default workspace is the clone's root. A second terminal can check `curl http://127.0.0.1:5679/healthz`.
 
-Configure your MCP client to use Streamable HTTP, that URL, and the header `Authorization: Bearer <the same token>`. Client configuration syntax varies; the included [plugin](plugins/csy-workspace-mcp/README.md) provides connection files for compatible clients. For remote access, use an HTTPS reverse proxy or an authenticated tunnel and set `client.url` to its endpoint.
+Configure your MCP client to use Streamable HTTP, that URL, and the header `Authorization: Bearer <the same token>`. Client configuration syntax varies; the included [plugin](plugins/terminal-workspace-mcp/README.md) provides connection files for compatible clients. For remote access, use an HTTPS reverse proxy or an authenticated tunnel and set `client.url` to its endpoint.
 
 For a persistent local token, put `{"auth":{"token":"your-token"}}` in `mcp_server/config.local.json` with file mode 0600. That file is ignored by Git. The server reads `config.json`, its local overlay, then explicit environment overrides.
 

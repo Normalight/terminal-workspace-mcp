@@ -15,7 +15,7 @@ if (action === 'show') {
   // Machine-to-machine output for service.py; never log it or commit it.
   console.log(JSON.stringify({ ...loaded, nodeExecutable: process.execPath }));
 } else if (action === 'sync-plugin') {
-  const directory = await realpath(values['plugin-dir'] ?? fileURLToPath(new URL('../../plugins/csy-workspace-mcp', import.meta.url)));
+  const directory = await realpath(values['plugin-dir'] ?? fileURLToPath(new URL('../../plugins/terminal-workspace-mcp', import.meta.url)));
   const relative = path.relative(loaded.config.workspaceRoot, directory);
   if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('plugin directory must remain inside workspaceRoot');
   const connection = pluginConnection(loaded.config);

@@ -16,6 +16,6 @@ This is a single-account remote shell for trusted clients and agents. A valid to
 
 ## Reporting vulnerabilities
 
-Use [GitHub private vulnerability reporting](https://github.com/Normalight/csy-workspace-mcp/security/advisories/new) for authentication bypass, unintended file disclosure, process-isolation failures, or related vulnerabilities. Include affected versions, a minimal reproduction, and the expected versus observed behavior. Do not include live credentials or private terminal logs.
+Use [GitHub private vulnerability reporting](https://github.com/Normalight/terminal-workspace-mcp/security/advisories/new) for authentication bypass, unintended file disclosure, process-isolation failures, or related vulnerabilities. Include affected versions, a minimal reproduction, and the expected versus observed behavior. Do not include live credentials or private terminal logs.
 
 If private reporting is unavailable, open an issue requesting a private contact channel without disclosing exploit details. Security fixes target the latest release; there is no separate long-term support branch or guaranteed response time.

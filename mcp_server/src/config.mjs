@@ -98,5 +98,5 @@ export function loadConfig({ file, env = process.env } = {}) {
 }
 
 export function pluginConnection(config) {
-  return { mcpServers: { 'csy-workspace': { type: 'streamable-http', url: config.client.url, bearer_token_env_var: config.client.tokenEnv } } };
+  return { mcpServers: { 'terminal-workspace': { type: 'streamable-http', url: config.client.url, bearer_token_env_var: config.client.tokenEnv } } };
 }

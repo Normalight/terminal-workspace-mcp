@@ -1,4 +1,4 @@
-# CSY Workspace MCP
+# Terminal Workspace MCP
 
 [English](README.md) · [详细操作文档](mcp_server/README.md) · [MIT 许可证](LICENSE)
 
@@ -17,19 +17,19 @@
 需要 Linux、Bash、tmux ≥3.2、Node.js ≥22、npm，以及用于服务管理和测试的 Python ≥3.9。当前实现使用 Linux `/proc`，不支持 macOS 和原生 Windows。
 
 ```bash
-git clone https://github.com/Normalight/csy-workspace-mcp.git
-cd csy-workspace-mcp
+git clone https://github.com/Normalight/terminal-workspace-mcp.git
+cd terminal-workspace-mcp
 mkdir -p .tmp .cache/npm
 npm_config_cache="$PWD/.cache/npm" npm ci --prefix mcp_server
 
 export MCP_AUTH_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')"
-export CSY_MCP_TOKEN="$MCP_AUTH_TOKEN"
+export TERMINAL_MCP_TOKEN="$MCP_AUTH_TOKEN"
 node mcp_server/src/server.mjs
 ```
 
 默认 MCP 地址为 `http://127.0.0.1:5679/mcp`，默认工作区为仓库根目录。客户端选择 Streamable HTTP，设置同一地址和 `Authorization: Bearer <同一个 token>`。
 
-远程访问时通过 HTTPS 反向代理或认证隧道连接，将 `client.url` 改为实际入口。兼容的客户端可使用仓库内的[插件连接文件](plugins/csy-workspace-mcp/README.md)。
+远程访问时通过 HTTPS 反向代理或认证隧道连接，将 `client.url` 改为实际入口。兼容的客户端可使用仓库内的[插件连接文件](plugins/terminal-workspace-mcp/README.md)。
 
 ## 配置
 

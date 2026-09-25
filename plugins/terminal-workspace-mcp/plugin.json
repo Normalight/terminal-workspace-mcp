@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-  "name": "csy-workspace-mcp",
+  "name": "terminal-workspace-mcp",
   "version": "0.4.0",
-  "description": "Operate the CSY server through persistent shell commands and original file retrieval.",
+  "description": "Operate the connected server through persistent shell commands and original file retrieval.",
   "author": {
     "name": "Normalight and contributors"
   },
@@ -17,10 +17,10 @@
   "extensions": {
     "com.openai": {
       "interface": {
-        "displayName": "CSY Workspace MCP",
-        "shortDescription": "Persistent shell commands and files on the CSY server.",
+        "displayName": "Terminal Workspace MCP",
+        "shortDescription": "Persistent shell commands and files on the connected server.",
         "longDescription": "Execute shell commands, reuse tmux sessions, answer prompts, and retrieve original files through two MCP tools.",
-        "developerName": "CSY workspace",
+        "developerName": "Normalight",
         "category": "Productivity",
         "capabilities": [
           "Read",
@@ -28,8 +28,8 @@
           "Terminal"
         ],
         "defaultPrompt": [
-          "Inspect the CSY workspace and summarize the relevant files.",
-          "Run a safe diagnostic command in the CSY workspace.",
+          "Inspect the configured workspace and summarize the relevant files.",
+          "Run a safe diagnostic command in the configured workspace.",
           "Review a proposed change before applying it."
         ]
       }

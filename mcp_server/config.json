@@ -56,7 +56,7 @@
   },
   "client": {
     "url": "http://127.0.0.1:5679/mcp",
-    "tokenEnv": "CSY_MCP_TOKEN"
+    "tokenEnv": "TERMINAL_MCP_TOKEN"
   },
   "diagnostics": {
     "tunnelUrl": "http://127.0.0.1:8791"

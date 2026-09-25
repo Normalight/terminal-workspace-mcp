@@ -1,6 +1,6 @@
-# CSY Workspace MCP
+# Terminal Workspace MCP
 
-[Public repository](https://github.com/Normalight/csy-workspace-mcp) · [MIT license](LICENSE) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+[Public repository](https://github.com/Normalight/terminal-workspace-mcp) · [MIT license](LICENSE) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
 A personal remote terminal for the account running the server. Release 0.4.0 exposes two tools by default:
 
@@ -103,7 +103,7 @@ Send `command` and interactive input in separate calls. Only one tracked command
 
 PTY output combines stdout/stderr and includes command echo and ANSI control sequences. `stderr` is empty because the terminal merges both streams. For structured output, redirect to a file and retrieve it with `get_file`. Large responses place the full page in `structuredContent`, with a short text summary.
 
-The managed Bash uses an isolated rcfile and a prompt hook to record exit codes. Preserve `PROMPT_COMMAND` and the internal `__csy_*` variables. Shell `exit`/`exec` may return `terminal_closed` instead of a prompt-generated result. `command:"exit"` ends the shell and retains its logs. tmux survives MCP server restarts; machine reboot or termination of the tmux server ends its sessions.
+The managed Bash uses an isolated rcfile and a prompt hook to record exit codes. Preserve `PROMPT_COMMAND` and the internal command-tracking variables. Shell `exit`/`exec` may return `terminal_closed` instead of a prompt-generated result. `command:"exit"` ends the shell and retains its logs. tmux survives MCP server restarts; machine reboot or termination of the tmux server ends its sessions.
 
 Inside a managed shell, use its configured terminal root to manage sessions. For an external terminal, get the resolved path from `config.mjs show`:
 

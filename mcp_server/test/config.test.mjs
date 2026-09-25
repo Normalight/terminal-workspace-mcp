@@ -20,7 +20,7 @@ test('config derives runtime paths and relay targets, validates overrides, and i
   assert.equal(loaded.config.workspaceRoot,f.root);assert.equal(loaded.config.paths.terminals,path.join(f.root,'outputs/mcp-terminals'));
   assert.equal(loaded.config.relay.targetHost,'127.0.0.1');assert.equal(loaded.config.relay.targetPort,23456);
   assert.equal(loaded.healthOrigin,'http://127.0.0.1:23456');assert.equal(loaded.env.MCP_AUTH_TOKEN,'synthetic-env-value');assert(!JSON.stringify(loaded.config).includes('synthetic-'));
-  assert.equal(pluginConnection(loaded.config).mcpServers['csy-workspace'].url,'https://example.test/custom');
+  assert.equal(pluginConnection(loaded.config).mcpServers['terminal-workspace'].url,'https://example.test/custom');
   const override=loadConfig({file,env:{MCP_PORT:'23457',MCP_ENABLE_TERMINAL:'0',MCP_AUTH_TOKEN:'synthetic-explicit'}});
   assert.equal(override.config.http.port,23457);assert.equal(override.config.relay.targetPort,23457);assert(!override.config.tools.enableTerminal);assert.equal(override.env.MCP_AUTH_TOKEN,'synthetic-explicit');
   for(const env of [{MCP_PORT:'5679oops'},{MCP_ENABLE_TERMINAL:'false'},{MCP_TOOL_PROFILE:'invalid'}])assert.throws(()=>loadConfig({file,env}),/Invalid configuration|must be/);
@@ -36,7 +36,7 @@ test('plugin generation takes URL and token variable from one config',async()=>{
   await mkdir(plugin);await writeFile(file,JSON.stringify({workspaceRoot:'.',auth:{token:'synthetic-private-value'},client:{url:'https://example.test:9443/remote-mcp',tokenEnv:'CUSTOM_CLIENT_TOKEN'}}));
   const args=[path.join(workspaceRoot,'mcp_server/scripts/config.mjs'),'sync-plugin','--config',file,'--plugin-dir',plugin];
   await exec(process.execPath,args,{env:freshEnv(f.env),cwd:f.root});
-  for(const name of ['mcp.json','.mcp.json']){const text=await readFile(path.join(plugin,name),'utf8'),data=JSON.parse(text);assert.equal(data.mcpServers['csy-workspace'].url,'https://example.test:9443/remote-mcp');assert.equal(data.mcpServers['csy-workspace'].bearer_token_env_var,'CUSTOM_CLIENT_TOKEN');assert(!text.includes('synthetic-private-value'));}
+  for(const name of ['mcp.json','.mcp.json']){const text=await readFile(path.join(plugin,name),'utf8'),data=JSON.parse(text);assert.equal(data.mcpServers['terminal-workspace'].url,'https://example.test:9443/remote-mcp');assert.equal(data.mcpServers['terminal-workspace'].bearer_token_env_var,'CUSTOM_CLIENT_TOKEN');assert(!text.includes('synthetic-private-value'));}
  }finally{await f.cleanup();}
 });
 

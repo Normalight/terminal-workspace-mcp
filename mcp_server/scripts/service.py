@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Workspace-local start/restart helper for the CSY MCP HTTP process."""
+"""Workspace-local start/restart helper for the Terminal Workspace MCP HTTP process."""
 import argparse
 import json
 import os

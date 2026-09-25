@@ -78,7 +78,7 @@ function sessionStats() {
 
 export function createMcpServer() {
   const server = new McpServer({
-    name: "csy-workspace",
+    name: "terminal-workspace",
     version,
     instructions: "Personal remote terminal. Use execute_command for shell commands and reuse its sessionId to preserve state. Poll with sessionId/cursor, send input or key=C-c for interaction. Use ordinary shell commands for files, search, Git and task management. get_file retrieves original files or chunks. wait/output limits never terminate the shell. tmux persists across MCP restarts. Absolute and ~/ paths use the service account permissions.",
   });
@@ -271,7 +271,7 @@ if (process.env.MCP_NO_HTTP !== "1") {
     if (requestUrl.pathname === "/healthz") {
       sendJson(res, 200, {
         ok: true,
-        service: "csy-workspace-mcp",
+        service: "terminal-workspace-mcp",
         version, revision, toolCount, toolProfile,
         compression: compressionConfig,
         configFile: deployment.configFile,
@@ -289,7 +289,7 @@ if (process.env.MCP_NO_HTTP !== "1") {
     }
     if (requestUrl.pathname === "/metrics") {
       sendJson(res, 200, {
-        service: "csy-workspace-mcp",
+        service: "terminal-workspace-mcp",
         version, revision, toolCount, toolProfile,
         compression: compressionConfig,
         configFile: deployment.configFile,
@@ -314,7 +314,7 @@ if (process.env.MCP_NO_HTTP !== "1") {
   });
 
   httpServer.listen(port, host, () => {
-    console.error(`csy-workspace-mcp listening on http://${host}:${port}${endpoint}`);
+    console.error(`terminal-workspace-mcp listening on http://${host}:${port}${endpoint}`);
     console.error(`workspace=${workspace.root} writes=${enableWrite} command=${enableTerminal} auth=${authToken ? "bearer" : "anonymous"}`);
     console.error(`sessionIdleTtlMs=${sessionIdleTtlMs} directFileMaxBytes=${directFileMaxBytes} auditLog=${auditLogPath}`);
   });
