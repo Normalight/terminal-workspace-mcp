@@ -156,10 +156,33 @@ The notification carries status and identifiers; retrieve output using `execute_
 A runnable SDK example is [examples/completion-client.mjs](examples/completion-client.mjs). It waits for a pushed event without polling and then fetches the remaining output:
 
 ```bash
-node mcp_server/examples/completion-client.mjs 'sleep 5; printf finished'
+node mcp_server/examples/completion-client.mjs 'sleep 5; printf first' 'sleep 2; printf second'
 ```
 
 It uses the configured local HTTP endpoint and authentication; set `MCP_NOTIFICATION_URL` to exercise a relay/tunnel endpoint instead. Save the IDs it prints to re-subscribe if interrupted.
+
+### Reuse connections and reclaim short-lived sessions
+
+There are three separate lifetimes:
+
+| Layer | Reuse and cleanup |
+| --- | --- |
+| HTTP request/TCP socket | Each RPC uses a finite POST/JSON response. TCP keep-alive can reuse a socket between requests; idle sockets have a 5-second keep-alive timeout. Only GET SSE stays open for events. |
+| MCP protocol session | Initialize once and reuse the returned `Mcp-Session-Id` header on POST, GET and DELETE. One SSE stream carries completion events for all subscribed tasks on that session. |
+| Terminal/task | Save tool-returned `sessionId` (`term_...`), `commandId` and output cursor. These survive MCP session expiry/restart. Repeatedly reading one task does not require opening another terminal. |
+
+Use one SDK `Client`/transport for the whole workflow, including output reads and multiple commands, rather than connecting inside each tool call. Repeated subscriptions to the same command on that MCP session are deduplicated. `completionNotification.listening` reports whether a listener is present at response time; `subscribed:true` alone does not mean a client is listening. If the host supports only request/response, poll using saved terminal IDs and output cursors. Finish a workflow with HTTP DELETE (`transport.terminateSession()`), then close the client. The [MCP session contract](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#session-management) allows HTTP connections to change while retaining the same logical session.
+
+Defaults for `http.sessions`:
+
+- `idleTtlMs: 120000`: reclaim an MCP session after 2 idle minutes when it has no in-flight request or open SSE listener.
+- `gcIntervalMs: 10000`: check every 10 seconds, and again before admitting a new session.
+- `pressureIdleMs: 5000`: at the 128-session limit, reclaim the least recently used eligible session after at least 5 idle seconds. This grace protects newly initialized sessions while their first requests arrive.
+- Reserve capacity during concurrent initialization. Malformed requests allocate no session and evict none. If all slots are active, listening or within the grace period, return HTTP 503 with `Retry-After: 5` rather than interrupting them.
+
+Pressure reclamation closes protocol state and its notification subscriptions only; terminal processes, logs and task results remain. A stale MCP header gets HTTP 404. Initialize once again, then inspect/re-subscribe to the saved terminal/command IDs without rerunning the command. Do not blindly retry a command after an ambiguous network failure. Server logic cannot make an external host retain headers; short-lived clients are accommodated by this reclamation policy without merging distinct clients.
+
+`/healthz` and `/metrics` expose the effective `httpSessions` policy, active/reserved sessions, listener count and reclaimable count. Audit events distinguish `session_evicted` from `session_expired`; counters include `sessionsEvicted` and `sessionsRejected`. Override the pressure grace with `MCP_SESSION_PRESSURE_IDLE_MS`, alongside existing session TTL/GC variables.
 
 ### Identify and reclaim managed tmux sessions
 

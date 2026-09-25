@@ -76,6 +76,10 @@ python3 -B mcp_server/scripts/service.py stop
 
 调用方必须处理通知，并允许 `notice` 级日志；服务端无法单方面让客户端或模型自动开始下一轮。不支持事件的客户端继续使用 `sessionId` 和 `nextCursor` 轮询，`waitMs:10000` 至 `30000`。等待到期或连接中断不等于任务失败，不要直接重跑。详见[接入机制与限制](mcp_server/README.md#long-tasks)和[可运行的调用方示例](mcp_server/examples/completion-client.mjs)。
 
+普通工具调用返回有限 JSON 响应；接收事件使用一条持续的 GET SSE。客户端应初始化一次，重复使用 HTTP 请求头 `Mcp-Session-Id`，它与工具参数中的终端 `sessionId` 是两层不同的标识。同一 MCP 会话复用一条 SSE 接收多个任务事件，同一任务的重复订阅会去重。返回的 `completionNotification.listening` 表明当时是否存在监听连接；仅 `subscribed:true` 不代表调用方正在接收事件。
+
+无在途请求、无 SSE 监听的 MCP 会话默认空闲 2 分钟回收，每 10 秒检查；容量满时优先回收已闲置至少 5 秒的最久未使用会话。并发初始化也占用预留名额，防止超配。回收保留 tmux 任务和结果；客户端收到 404 后重新初始化并按保存的任务 ID 续读即可。流程结束主动 DELETE 释放会话。[连接复用与回收细节](mcp_server/README.md#reuse-connections-and-reclaim-short-lived-sessions)。
+
 默认每 30 秒检查一次，回收已退出会话及空闲超过 5 分钟的 shell。正在执行命令、有后台子进程、有人连接、手动增加窗口/分屏或标记保留的会话会跳过，日志和文件保留。回收后 shell 的目录和环境变量消失，因此独立操作应明确路径。
 
 新建终端通过 shell 提示符标记确认空闲，保护通过交互输入启动的 `read` 等内建命令；命令结束也会等待日志写入确认。请保留托管 shell 的 `PROMPT_COMMAND`、`DEBUG` trap 和内部状态变量。升级前已存在的终端继续使用原有 shell 和日志协议，缺少新提示符标记的会话会跳过空闲回收；需要新的输出完成保障时请新建会话。

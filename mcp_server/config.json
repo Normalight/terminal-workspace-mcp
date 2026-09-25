@@ -13,8 +13,9 @@
     },
     "sessions": {
       "max": 128,
-      "idleTtlMs": 14400000,
-      "gcIntervalMs": 300000
+      "idleTtlMs": 120000,
+      "gcIntervalMs": 10000,
+      "pressureIdleMs": 5000
     }
   },
   "auth": {

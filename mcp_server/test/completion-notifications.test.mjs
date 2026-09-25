@@ -12,9 +12,11 @@ test('completion subscriptions defer offline delivery, retry, deduplicate and ho
     send: async msg => { if (++attempts === 1) throw Error('temporary disconnect'); messages.push(msg); },
   });
   try {
-    assert(watcher.observe(state, undefined, true).completionNotification.subscribed);
+    const subscription = watcher.observe(state, undefined, true).completionNotification;
+    assert(subscription.subscribed); assert.equal(subscription.listening, false);
     await watcher.tick(); assert.equal(attempts, 0);
     connected = true;
+    assert.equal(watcher.observe(state).completionNotification.listening, true);
     await watcher.tick(); assert.equal(messages.length, 0);
     await watcher.tick(); assert.equal(messages.length, 1);
     assert.equal(messages[0].data.outputEndCursor, 123);

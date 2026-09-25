@@ -23,7 +23,7 @@ export class CompletionNotifications {
     if (!this.pending.size) { clearInterval(this.timer); this.timer = undefined; }
     return { ...state, completionNotification: {
       method: 'notifications/message', logger: 'terminal-workspace.completion',
-      subscribed: this.pending.has(key), sent: this.sent.has(key),
+      subscribed: this.pending.has(key), listening: this.ready(), sent: this.sent.has(key),
     } };
   }
 

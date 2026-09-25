@@ -3,6 +3,8 @@ import { createServer as createHttpServer } from "node:http";
 import process from "node:process";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { InitializeRequestSchema, JSONRPCRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { HttpSessionPool } from "./http-session-pool.mjs";
 import { HttpTransport } from "./http-transport.mjs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { LocalCommandExecutor } from "./local-executor.mjs";
@@ -54,7 +56,6 @@ try { revision = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: fi
 const version = "0.4.1";
 const maxSessions = settings.http.sessions.max;
 let toolCount = 0;
-const sessions = new Map();
 const startedAt = Date.now();
 const sessionIdleTtlMs = settings.http.sessions.idleTtlMs;
 const sessionGcIntervalMs = settings.http.sessions.gcIntervalMs;
@@ -63,7 +64,7 @@ const compressionConfig = settings.http.compression;
 const runtimeCounters = {
   compressedResponses: 0, compressionOriginalBytes: 0, compressionWireBytes: 0,
   httpRequests: 0, httpErrors: 0, sessionsCreated: 0, sessionsClosed: 0,
-  sessionsExpired: 0, unknownSessionRequests: 0, oversizedDirectFilesDenied: 0,
+  sessionsExpired: 0, sessionsEvicted: 0, sessionsRejected: 0, unknownSessionRequests: 0, oversizedDirectFilesDenied: 0,
 };
 
 function sessionHash(id) {
@@ -79,16 +80,16 @@ async function auditHttp(entry) {
   auditWriter.write(JSON.stringify({ timestamp: new Date().toISOString(), ...entry }) + "\n");
 }
 
-function sessionStats() {
-  const now = Date.now();
-  let inflight = 0;
-  let oldestIdleMs = 0;
-  for (const session of sessions.values()) {
-    inflight += session.inflight ?? 0;
-    oldestIdleMs = Math.max(oldestIdleMs, now - (session.lastActiveAt ?? session.createdAt ?? now));
-  }
-  return { active: sessions.size, inflight, oldestIdleMs };
-}
+const sessionPool = new HttpSessionPool({ ...settings.http.sessions,
+  onRemove: (id, session, reason, idleMs) => {
+    const counter = { expired: 'sessionsExpired', capacity: 'sessionsEvicted', closed: 'sessionsClosed' }[reason];
+    if (counter) runtimeCounters[counter]++;
+    void auditHttp({ event: reason === 'capacity' ? 'session_evicted' : `session_${reason}`, session: sessionHash(id), idleMs, reason });
+    if (reason !== 'closed') void session.transport.close().catch(error => console.error('[session-close-error]', error.message));
+  },
+});
+const sessions = sessionPool.sessions;
+const sessionStats = () => sessionPool.stats();
 
 export function createMcpServer() {
   const server = new McpServer({
@@ -96,7 +97,7 @@ export function createMcpServer() {
     version,
   }, {
     capabilities: { logging: {} },
-    instructions: `Personal remote terminal. Prefer absolute paths on every call; use an absolute cwd for new sessions and explicit absolute paths or cd for reused ones. Start each task once; retain sessionId and nextCursor. Commands returned as running subscribe to completion notices via notifications/message (logger=terminal-workspace.completion, level=notice). Keep GET SSE or stdio listening; on data.event=command_completed, verify status/exitCode and fetch remaining output with sessionId/commandId/cursor and no command. If notifications are unsupported, poll with sessionId/cursor, waitMs=10000..30000. Use notifyOnCompletion=false to opt out; after a new MCP connection, send sessionId/commandId and notifyOnCompletion=true to re-subscribe. Waiting/output limits do not stop execution or justify rerunning. Check status/exitCode and drain output before reporting completion. Save IDs/cursors/log/artifact paths for handoff; notification delivery requires an active listening client and does not by itself resume a model turn. Idle shells expire after ${settings.terminal.idleTtlMs}ms (0 disables idle expiry); running commands, child processes, attached clients and @mcp_keep=1 sessions are protected. Use node "$MCP_TERMINAL_ADMIN" list or cleanup (--apply to reclaim); logs remain. Prefer absolute paths for get_file. Use input or key=C-c for interaction; command=exit closes a finished shell after checking background jobs.`,
+    instructions: `Personal remote terminal. Prefer absolute paths on every call; use an absolute cwd for new sessions and explicit absolute paths or cd for reused ones. Start each task once; retain the terminal sessionId, commandId and nextCursor. Reuse that terminal for subsequent inspections. A terminal sessionId is distinct from the MCP-Session-Id HTTP header: client transports should initialize once, reuse that header and one SSE listener across calls, and DELETE when finished. A 404 MCP session requires reinitialization and re-subscription using saved terminal IDs; do not rerun the command. Commands returned as running subscribe to completion notices via notifications/message (logger=terminal-workspace.completion, level=notice). Keep GET SSE or stdio listening; on data.event=command_completed, verify status/exitCode and fetch remaining output with sessionId/commandId/cursor and no command. If notifications are unsupported, poll with sessionId/cursor, waitMs=10000..30000. Use notifyOnCompletion=false to opt out; after a new MCP connection, send sessionId/commandId and notifyOnCompletion=true to re-subscribe. Waiting/output limits do not stop execution or justify rerunning. Check status/exitCode and drain output before reporting completion. Save IDs/cursors/log/artifact paths for handoff; notification delivery requires an active listening client and does not by itself resume a model turn. Idle shells expire after ${settings.terminal.idleTtlMs}ms (0 disables idle expiry); running commands, child processes, attached clients and @mcp_keep=1 sessions are protected. Use node "$MCP_TERMINAL_ADMIN" list or cleanup (--apply to reclaim); logs remain. Prefer absolute paths for get_file. Use input or key=C-c for interaction; command=exit closes a finished shell after checking background jobs.`,
   });
   const completions = new CompletionNotifications({ terminals: terminalManager, jobs: jobManager,
     ready: () => !!server.server.transport && (server.server.transport.notificationStreamOpen ?? true),
@@ -222,33 +223,45 @@ async function handleMcp(req, res) {
       sendJson(res, 404, { error: "unknown MCP session" });
       return;
     }
+    let reservation;
     if (!session) {
-      if (sessions.size >= maxSessions) { sendJson(res, 503, { error: "session limit reached" }); return; }
+      // Validate before admission: malformed/missing initialization must neither
+      // allocate a session nor displace another client's idle connection.
+      if (!JSONRPCRequestSchema.safeParse(body).success || !InitializeRequestSchema.safeParse(body).success) {
+        sendJson(res, 400, { error: "valid initialize request required when MCP-Session-Id is absent" }); return;
+      }
+      reservation = sessionPool.reserve();
+      if (!reservation) {
+        runtimeCounters.sessionsRejected++;
+        sendJson(res, 503, { error: "session capacity busy; retry after backoff", retryAfterMs: 5000 }, { 'retry-after': '5' }); return;
+      }
       let transport;
-      const server = createMcpServer();
-      session = { server, transport: null, createdAt: Date.now(), lastActiveAt: Date.now(), inflight: 0 };
-      transport = new HttpTransport({
-        sessionIdGenerator: () => randomUUID(),
-        enableJsonResponse: true,
-        onsessioninitialized: (id) => {
-          const now = Date.now();
-          sessions.set(id, session);
-          runtimeCounters.sessionsCreated += 1;
-          void auditHttp({ event: "session_created", session: sessionHash(id) });
-        },
-        onsessionclosed: (id) => {
-          if (sessions.delete(id)) {
-            runtimeCounters.sessionsClosed += 1;
-            void auditHttp({ event: "session_closed", session: sessionHash(id) });
-          }
-        },
-      }, { ...compressionConfig, onResult: stats => {
-        if (stats.encoding === "gzip") runtimeCounters.compressedResponses++;
-        runtimeCounters.compressionOriginalBytes += stats.originalBytes;
-        runtimeCounters.compressionWireBytes += stats.wireBytes;
-      } });
-      session.transport = transport;
-      await server.connect(transport);
+      try {
+        const server = createMcpServer();
+        session = { server, transport: null, createdAt: Date.now(), lastActiveAt: Date.now(), inflight: 0 };
+        transport = new HttpTransport({
+          sessionIdGenerator: () => randomUUID(),
+          enableJsonResponse: true,
+          onsessioninitialized: (id) => {
+            reservation.activate(id, session);
+            runtimeCounters.sessionsCreated += 1;
+            void auditHttp({ event: "session_created", session: sessionHash(id) });
+          },
+          onsessionclosed: (id) => {
+            sessionPool.remove(id, 'closed');
+          },
+        }, { ...compressionConfig, onResult: stats => {
+          if (stats.encoding === "gzip") runtimeCounters.compressedResponses++;
+          runtimeCounters.compressionOriginalBytes += stats.originalBytes;
+          runtimeCounters.compressionWireBytes += stats.wireBytes;
+        } });
+        session.transport = transport;
+        await server.connect(transport);
+      } catch (error) {
+        reservation.release();
+        await transport?.close().catch(() => {});
+        throw error;
+      }
     }
     session.lastActiveAt = Date.now();
     session.inflight = (session.inflight ?? 0) + 1;
@@ -260,6 +273,8 @@ async function handleMcp(req, res) {
     } finally {
       session.inflight = Math.max(0, (session.inflight ?? 1) - 1);
       session.lastActiveAt = Date.now();
+      reservation?.release();
+      if (reservation && !session.transport.sessionId) await session.transport.close().catch(() => {});
     }
     return;
   }
@@ -300,6 +315,7 @@ if (process.env.MCP_NO_HTTP !== "1") {
         service: "terminal-workspace-mcp",
         version, revision, toolCount, toolProfile,
         compression: compressionConfig,
+        httpSessions: settings.http.sessions,
         configFile: deployment.configFile,
         workspace: workspace.root,
         writesEnabled: enableWrite,
@@ -319,6 +335,7 @@ if (process.env.MCP_NO_HTTP !== "1") {
         service: "terminal-workspace-mcp",
         version, revision, toolCount, toolProfile,
         compression: compressionConfig,
+        httpSessions: settings.http.sessions,
         configFile: deployment.configFile,
         uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
         sessions: sessionStats(),
@@ -340,24 +357,16 @@ if (process.env.MCP_NO_HTTP !== "1") {
     });
   });
 
+  // Finite POST responses release idle TCP sockets promptly. This timeout
+  // starts after a response ends, so it does not cut off an open SSE response.
+  httpServer.keepAliveTimeout = 5000;
   httpServer.listen(port, host, () => {
     console.error(`terminal-workspace-mcp listening on http://${host}:${port}${endpoint}`);
     console.error(`workspace=${workspace.root} writes=${enableWrite} command=${enableTerminal} auth=${authToken ? "bearer" : "anonymous"}`);
     console.error(`sessionIdleTtlMs=${sessionIdleTtlMs} directFileMaxBytes=${directFileMaxBytes} auditLog=${auditLogPath}`);
   });
 
-  const gcTimer = setInterval(() => {
-    const now = Date.now();
-    for (const [id, session] of sessions.entries()) {
-      const idleMs = now - (session.lastActiveAt ?? session.createdAt ?? now);
-      if ((session.inflight ?? 0) === 0 && !session.transport.notificationStreamOpen && idleMs >= sessionIdleTtlMs) {
-        sessions.delete(id);
-        runtimeCounters.sessionsExpired += 1;
-        void session.transport.close().catch(() => {});
-        void auditHttp({ event: "session_expired", session: sessionHash(id), idleMs });
-      }
-    }
-  }, sessionGcIntervalMs);
+  const gcTimer = setInterval(() => sessionPool.expire(), sessionGcIntervalMs);
   gcTimer.unref();
 
   async function shutdown() {

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reclaim idle MCP sessions under capacity pressure, reserve concurrent handshake slots, and protect live requests/SSE listeners; shorten default idle retention to two minutes.
+- Clarify HTTP/session/terminal reuse, report whether completion listeners are connected, and test sustained fresh-client traffic plus persistent listener reuse.
+
 - Push per-connection command completion notices over MCP logging/SSE or stdio, with bounded subscriptions, opt-out, reconnect re-subscription, and a runnable client example.
 - Document event handling, polling fallback, command IDs, and output-drain recovery in tools, server instructions, and operator guidance.
 

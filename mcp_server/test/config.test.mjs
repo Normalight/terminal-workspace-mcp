@@ -17,6 +17,7 @@ test('config derives runtime paths and relay targets, validates overrides, and i
  try{
   await writeFile(file,JSON.stringify({workspaceRoot:'.',http:{host:'0.0.0.0',port:23456},auth:{tokenEnv:'TEST_CONFIG_TOKEN',token:'synthetic-file-value'},client:{url:'https://example.test/custom',tokenEnv:'CLIENT_TOKEN'}}));
   const loaded=loadConfig({file,env:{TEST_CONFIG_TOKEN:'synthetic-env-value'}});
+  assert.equal(loaded.config.http.sessions.idleTtlMs,120000);assert.equal(loaded.config.http.sessions.gcIntervalMs,10000);assert.equal(loaded.config.http.sessions.pressureIdleMs,5000);
   assert.equal(loaded.config.workspaceRoot,f.root);assert.equal(loaded.config.paths.terminals,path.join(f.root,'outputs/mcp-terminals'));
   assert.equal(loaded.config.relay.targetHost,'127.0.0.1');assert.equal(loaded.config.relay.targetPort,23456);
   assert.equal(loaded.healthOrigin,'http://127.0.0.1:23456');assert.equal(loaded.env.MCP_AUTH_TOKEN,'synthetic-env-value');assert(!JSON.stringify(loaded.config).includes('synthetic-'));
