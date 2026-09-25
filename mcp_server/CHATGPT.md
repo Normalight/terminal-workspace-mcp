@@ -14,7 +14,7 @@ python3 -B mcp_server/scripts/service.py status
 curl --noproxy '*' -fsS http://127.0.0.1:5679/healthz
 ```
 
-With the default configuration, health reports `version: "0.4.0"`, `toolProfile: "minimal"`, and `toolCount: 2`. Adjust the URL if you changed the listener. Health is a liveness check; it does not prove authenticated tool discovery works.
+With the default configuration, health reports `version: "0.4.1"`, `toolProfile: "minimal"`, and `toolCount: 2`. Adjust the URL if you changed the listener. Health is a liveness check; it does not prove authenticated tool discovery works.
 
 ## 2. Connect a Secure MCP Tunnel
 

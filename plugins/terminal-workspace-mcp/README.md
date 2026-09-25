@@ -4,7 +4,7 @@ Connect to a self-hosted Terminal Workspace MCP server through two tools: `execu
 
 Set `TERMINAL_MCP_TOKEN` in the client environment using the same token as the server. Connection files are generated from `mcp_server/config.json` (`client.url` and `client.tokenEnv`). Run `node mcp_server/scripts/config.mjs sync-plugin` from the repository root after changing those fields. Do not edit `mcp.json` or `.mcp.json` by hand. The portable and Codex plugin manifests use the same connection configuration.
 
-The `terminal-workspace-operator` skill explains session reuse, interactive input, output cursors, and chunked file retrieval. Plugin and server release versions are 0.4.0. Development installations may carry a Codex cachebuster suffix. The source package uses the [MIT license](LICENSE).
+The `terminal-workspace-operator` skill explains session reuse, interactive input, output cursors, and chunked file retrieval. Plugin and server release versions are 0.4.1. Development installations may carry a Codex cachebuster suffix. The source package uses the [MIT license](LICENSE).
 
 The server's default `minimal` profile advertises two tools. Refresh the client's connection/tool discovery after upgrading; the server cannot replace schemas already captured in an existing client turn. `/healthz` reports version, revision, profile, and tool count.
 

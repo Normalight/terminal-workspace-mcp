@@ -85,7 +85,7 @@ def main():
             try:
                 with opener.open(url, timeout=2) as response:
                     health = json.load(response)
-                data.update({key: health.get(key) for key in ['version', 'revision', 'toolCount', 'toolProfile', 'writesEnabled', 'commandEnabled']})
+                data.update({key: health.get(key) for key in ['version', 'revision', 'toolCount', 'toolProfile', 'writesEnabled', 'commandEnabled', 'terminalCleanup']})
             except Exception as error:
                 data['healthError'] = str(error)
         print(json.dumps(data))
@@ -141,7 +141,8 @@ def main():
                 return
             with opener.open(health_url, timeout=1) as response:
                 health = json.load(response)
-            if health.get('version') == '0.4.0':
+            expected_version = json.loads((ROOT / 'mcp_server/package.json').read_text())['version']
+            if health.get('version') == expected_version:
                 print(json.dumps({'running': True, 'pid': process.pid, 'version': health['version'], 'toolCount': health.get('toolCount')}))
                 return
         except Exception:

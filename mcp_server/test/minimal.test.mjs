@@ -13,6 +13,8 @@ test('two-tool profile handles shell state, prompts, paging, exit, and file chun
  const {createMcpServer}=await import('../src/server.mjs');const server=createMcpServer(),client=new Client({name:'minimal-test',version:'1'});const [ct,st]=InMemoryTransport.createLinkedPair();await server.connect(st);await client.connect(ct);let id;
  const call=async(name,args)=>{const r=await client.callTool({name,arguments:args});assert(!r.isError,JSON.stringify(r));return r;};
  try{
+ assert(client.getInstructions()?.includes('sessionId'));
+ assert.equal(client.getServerVersion().instructions,undefined);
  const tools=(await client.listTools()).tools;assert.deepEqual(tools.map(x=>x.name).sort(),['execute_command','get_file']);
  assert(Buffer.byteLength(JSON.stringify(tools))<6000);
  let r=(await call('execute_command',{command:'export TEST_CONTEXT=kept; mkdir child; cd child',cwd:f.root,waitMs:1000})).structuredContent;id=r.sessionId;assert.equal(r.exitCode,0);

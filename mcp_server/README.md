@@ -2,14 +2,14 @@
 
 [Public repository](https://github.com/Normalight/terminal-workspace-mcp) · [MIT license](LICENSE) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
-A personal remote terminal for the account running the server. Release 0.4.0 exposes two tools by default:
+A personal remote terminal for the account running the server. Release 0.4.1 exposes two tools by default:
 
 - `execute_command`: shell commands, persistent tmux sessions, interactive input, and output polling.
 - `get_file`: original files and images, with resumable chunks for large files.
 
 Use ordinary shell commands for directory listings, text editing, search, Git, and process management. Paths may be absolute, `~/`, or relative to the default workspace; the service account's permissions apply. Command output and files retain their original content.
 
-Linux, Bash, Node.js 22+, npm, and tmux 3.2+ are required. The service helper and tests require Python 3.9+. Process identity uses Linux `/proc`; macOS and native Windows are unsupported. HTTP MCP connections can come and go without ending tmux processes.
+Linux, Bash, Node.js 22+, npm, tmux 3.2+, and `flock` (util-linux) are required. The service helper and tests require Python 3.9+. Process identity uses Linux `/proc`; macOS and native Windows are unsupported. HTTP MCP connections can come and go without ending running tmux tasks.
 
 ## Install
 
@@ -75,6 +75,8 @@ See the [ChatGPT deployment and update guide](CHATGPT.md) ([中文](CHATGPT.zh-C
 
 ## Execute and interact
 
+Prefer absolute paths on every call, including `get_file`. Use an absolute `cwd` for a new session; on reused sessions, use absolute operands or explicitly `cd -- /absolute/path`. `cwd` does not reset an existing shell. Idle shells can be reclaimed, so do not rely on a previous session's directory or environment for independent operations.
+
 Start a shell and keep its returned `sessionId`:
 
 ```json
@@ -119,6 +121,36 @@ tmux -S "$MCP_TERMINAL_ROOT/tmux.sock" kill-session -t <sessionId>
 ```
 
 Close only sessions belonging to the completed task when their processes are no longer needed.
+
+### Long tasks
+
+Start once, then poll the returned `sessionId` with the previous `nextCursor`, without resending `command`. Use `waitMs:10000` to `30000` when output is sparse. Waiting expiry, output truncation, or a dropped connection does not mean execution stopped. Inspect the existing session before deciding whether a retry is needed. Report completion only after checking `status`, `exitCode`, and remaining output. Save the session ID, command ID, cursor, and absolute log/artifact paths for handoff. Future monitoring needs an active client or separately configured scheduler.
+
+### Identify and reclaim managed tmux sessions
+
+Each configured `paths.terminals` directory uses its own `tmux.sock`. New sessions carry `@mcp_manager=terminal-workspace-mcp` and an instance-specific `@mcp_owner`; matching metadata records the native tmux session ID. The inventory also verifies older sessions against their stored metadata and generated Bash launch command. A `term_` name alone does not establish ownership.
+
+```bash
+node mcp_server/scripts/terminals.mjs list
+node mcp_server/scripts/terminals.mjs cleanup
+node mcp_server/scripts/terminals.mjs cleanup --apply
+# Limit cleanup to one returned ID:
+node mcp_server/scripts/terminals.mjs cleanup --session "$SESSION_ID" --apply
+```
+
+Pass `--config /absolute/config.json` for a separate deployment. The list reports managed/unverified ownership, active/idle/exited/missing state, native session/window/pane IDs, attachment count, eligibility and skip reason. Inside a newly created MCP shell, the helper is also available as `node "$MCP_TERMINAL_ADMIN" list`.
+
+By default the server checks every 30 seconds and reclaims exited sessions or shells idle for five minutes. Idle age starts from the latest use or command completion, not command start. Running commands, shell child processes (including background jobs), attached clients, manually added windows/panes, unknown owners and kept sessions are protected. Cross-process `flock` locks serialize managed command submission with cleanup; candidates are checked again before removal. Only tmux sessions are reclaimed: output logs, command records and files remain available. No default-socket tmux sessions are touched.
+
+Configure `terminal.idleTtlMs` (default `300000`; `0` disables idle reclamation) and `terminal.gcIntervalMs` (default `30000`). To retain an idle shell intentionally, use its returned ID:
+
+```bash
+tmux -S "$MCP_TERMINAL_ROOT/tmux.sock" set-option -t "$SESSION_ID" @mcp_keep 1
+# Restore normal reclamation:
+tmux -S "$MCP_TERMINAL_ROOT/tmux.sock" set-option -u -t "$SESSION_ID" @mcp_keep
+```
+
+Read the resolved terminal root from `config.mjs show` when operating outside an MCP shell. Reclamation discards that shell's cwd and environment. Reopen a session with explicit paths for new work. A task owner can end an unneeded shell immediately with `command:"exit"` after checking `jobs -pr` and completing any background work.
 
 ## Retrieve files
 

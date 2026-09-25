@@ -2,7 +2,7 @@
 
 Terminal Workspace MCP source is distributed under the MIT license. npm dependencies are installed separately and retain their own licenses and copyright notices; they are not included as vendored source in this repository.
 
-Direct dependencies in release 0.4.0:
+Direct dependencies pinned by the package lockfile:
 
 | Package | Version | License |
 | --- | --- | --- |

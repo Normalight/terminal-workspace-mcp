@@ -4,7 +4,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerTools } from '../src/tools.mjs';
 const results=[];
 for(const profile of ['minimal','legacy']){
- const server=new McpServer({name:'schema-measurement',version:'0.4.0'});
+ const server=new McpServer({name:'schema-measurement',version:'0.4.1'});
  registerTools(server,{workspace:{},executor:{},jobs:{},terminals:{},config:{toolProfile:profile},diagnostics:async()=>({})});
  const client=new Client({name:'schema-measurement',version:'1'});const [ct,st]=InMemoryTransport.createLinkedPair();await server.connect(st);await client.connect(ct);
  const tools=(await client.listTools()).tools;

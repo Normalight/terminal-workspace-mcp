@@ -14,7 +14,7 @@ Commands run with the service account's permissions, including access beyond the
 
 ## Requirements
 
-- Linux with Bash and tmux 3.2 or newer.
+- Linux with Bash, tmux 3.2 or newer, and `flock` (util-linux).
 - Node.js 22 or newer and npm.
 - Python 3.9 or newer for the service helper and tests.
 - Git for cloning and revision reporting.
@@ -49,6 +49,8 @@ ChatGPT connects to the running service through a tunnel or reachable HTTPS endp
 
 ## Use the two tools
 
+Prefer absolute paths on every call. Use an absolute `cwd` for new sessions; on reused sessions, use absolute operands or explicitly change directory. For long tasks, start once and poll with `sessionId`/`nextCursor` and a 10–30 second wait. Check the final status and exit code before reporting completion.
+
 Start a terminal:
 
 ```json
@@ -81,6 +83,10 @@ python3 -B mcp_server/scripts/service.py stop
 ```
 
 Use `--component relay` for the optional TCP relay. The helper manages detached processes; use your host's service manager for boot startup and automatic restart. Stopping the MCP process leaves tmux sessions running. See the [operator guide](mcp_server/README.md) for session cleanup, retention, file limits, compression, configuration precedence, and compatibility mode.
+
+## Session cleanup
+
+The server reclaims exited tmux sessions and shells idle for five minutes, checking every 30 seconds. Running commands, background children, attached clients, kept sessions and modified window layouts are protected; logs remain. `node mcp_server/scripts/terminals.mjs list` identifies managed sessions. `cleanup` previews candidates and `cleanup --apply` removes them. See the [ownership, retention and keep settings](mcp_server/README.md#identify-and-reclaim-managed-tmux-sessions).
 
 ## Development
 

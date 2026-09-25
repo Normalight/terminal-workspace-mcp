@@ -14,7 +14,7 @@ python3 -B mcp_server/scripts/service.py status
 curl --noproxy '*' -fsS http://127.0.0.1:5679/healthz
 ```
 
-默认配置应显示 `version: "0.4.0"`、`toolProfile: "minimal"`、`toolCount: 2`。修改过监听地址时相应调整命令。健康检查只能说明服务可用，认证和工具发现还要通过后面的连接验证。
+默认配置应显示 `version: "0.4.1"`、`toolProfile: "minimal"`、`toolCount: 2`。修改过监听地址时相应调整命令。健康检查只能说明服务可用，认证和工具发现还要通过后面的连接验证。
 
 ## 2. 使用 Secure MCP Tunnel
 

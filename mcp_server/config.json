@@ -33,7 +33,9 @@
     "shell": "/bin/bash",
     "maxSessions": 32,
     "maxWaitMs": 120000,
-    "maxOutputBytes": 524288
+    "maxOutputBytes": 524288,
+    "idleTtlMs": 300000,
+    "gcIntervalMs": 30000
   },
   "jobs": {
     "maxCount": 1000,

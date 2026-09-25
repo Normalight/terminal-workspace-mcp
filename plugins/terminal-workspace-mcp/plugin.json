@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "terminal-workspace-mcp",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Operate the connected server through persistent shell commands and original file retrieval.",
   "author": {
     "name": "Normalight and contributors"

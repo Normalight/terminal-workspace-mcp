@@ -8,6 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { LocalCommandExecutor } from "./local-executor.mjs";
 import { JobManager } from "./job-manager.mjs";
 import { TerminalManager } from "./terminal-manager.mjs";
+import { TerminalAdmin } from "./terminal-admin.mjs";
 import { childEnvironment } from "./runtime.mjs";
 import { registerTools } from "./tools.mjs";
 import { execFileSync } from "node:child_process";
@@ -35,9 +36,21 @@ const logsConfig = settings.logs;
 const jobManager = await new JobManager({ root: jobRoot, shell: settings.terminal.shell, maxJobs: settings.jobs.maxCount, maxRunning: settings.jobs.maxRunning, retentionDays: settings.jobs.retentionDays, ...logsConfig }).initialize();
 const localExecutor = new LocalCommandExecutor({ jobManager, maxTimeoutMs: settings.terminal.maxWaitMs, maxOutputBytes: settings.terminal.maxOutputBytes });
 const terminalManager = await new TerminalManager({ root: settings.paths.terminals, env: childEnv, maxSessions: settings.terminal.maxSessions, ...logsConfig }).initialize();
+const terminalAdmin = new TerminalAdmin(terminalManager);
+let terminalGcRunning = false;
+const terminalGcTimer = setInterval(async () => {
+  if (terminalGcRunning) return;
+  terminalGcRunning = true;
+  try {
+    const result = await terminalAdmin.cleanup({ apply: true, idleTtlMs: settings.terminal.idleTtlMs });
+    if (result.removed.length) console.error('[terminal-gc]', JSON.stringify({ removed: result.removed, logsRetained: true }));
+  } catch (error) { console.error('[terminal-gc-error]', error.message); }
+  finally { terminalGcRunning = false; }
+}, settings.terminal.gcIntervalMs);
+terminalGcTimer.unref();
 let revision = "unknown";
 try { revision = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8", timeout: 2000 }).trim(); } catch {}
-const version = "0.4.0";
+const version = "0.4.1";
 const maxSessions = settings.http.sessions.max;
 let toolCount = 0;
 const sessions = new Map();
@@ -80,7 +93,8 @@ export function createMcpServer() {
   const server = new McpServer({
     name: "terminal-workspace",
     version,
-    instructions: "Personal remote terminal. Use execute_command for shell commands and reuse its sessionId to preserve state. Poll with sessionId/cursor, send input or key=C-c for interaction. Use ordinary shell commands for files, search, Git and task management. get_file retrieves original files or chunks. wait/output limits never terminate the shell. tmux persists across MCP restarts. Absolute and ~/ paths use the service account permissions.",
+  }, {
+    instructions: `Personal remote terminal. Prefer absolute paths on every call; use an absolute cwd for new sessions and explicit absolute paths or cd for reused ones. Start each task once; retain sessionId and nextCursor. While status=running, poll with sessionId/cursor, no command, waitMs=10000..30000. Waiting/output limits do not stop execution or justify rerunning. Check status/exitCode and drain output before reporting completion. Save IDs/cursors/log/artifact paths for handoff; future monitoring needs an active client. Idle shells expire after ${settings.terminal.idleTtlMs}ms (0 disables idle expiry); running commands, child processes, attached clients and @mcp_keep=1 sessions are protected. Use node "$MCP_TERMINAL_ADMIN" list or cleanup (--apply to reclaim); logs remain. Prefer absolute paths for get_file. Use input or key=C-c for interaction; command=exit closes a finished shell after checking background jobs.`,
   });
   registerTools(server, { workspace, executor: localExecutor, jobs: jobManager, terminals: terminalManager,
     config: { enableTerminal, enableWrite, directFileMaxBytes, childEnv, version, toolProfile },
@@ -280,6 +294,7 @@ if (process.env.MCP_NO_HTTP !== "1") {
         commandEnabled: enableTerminal,
         maxFileBytes,
         directFileMaxBytes,
+        terminalCleanup: { idleTtlMs: settings.terminal.idleTtlMs, gcIntervalMs: settings.terminal.gcIntervalMs },
         uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
         sessions: sessionStats(),
         counters: runtimeCounters,
@@ -334,6 +349,7 @@ if (process.env.MCP_NO_HTTP !== "1") {
   gcTimer.unref();
 
   async function shutdown() {
+    clearInterval(terminalGcTimer);
     clearInterval(gcTimer);
     for (const { transport } of sessions.values()) await transport.close().catch(() => {});
     auditWriter.end();
