@@ -74,6 +74,8 @@ python3 -B mcp_server/scripts/service.py stop
 
 默认每 30 秒检查一次，回收已退出会话及空闲超过 5 分钟的 shell。正在执行命令、有后台子进程、有人连接、手动增加窗口/分屏或标记保留的会话会跳过，日志和文件保留。回收后 shell 的目录和环境变量消失，因此独立操作应明确路径。
 
+新建终端通过 shell 提示符标记确认空闲，保护通过交互输入启动的 `read` 等内建命令；命令结束也会等待日志写入确认。请保留托管 shell 的 `PROMPT_COMMAND`、`DEBUG` trap 和内部状态变量。升级前已存在的终端继续使用原有 shell 和日志协议，缺少新提示符标记的会话会跳过空闲回收；需要新的输出完成保障时请新建会话。
+
 ```bash
 node mcp_server/scripts/terminals.mjs list
 node mcp_server/scripts/terminals.mjs cleanup

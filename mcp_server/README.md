@@ -109,7 +109,9 @@ Send `command` and interactive input in separate calls. Only one tracked command
 
 PTY output combines stdout/stderr and includes command echo and ANSI control sequences. `stderr` is empty because the terminal merges both streams. For structured output, redirect to a file and retrieve it with `get_file`. Large responses place the full page in `structuredContent`, with a short text summary.
 
-The managed Bash uses an isolated rcfile and a prompt hook to record exit codes. Preserve `PROMPT_COMMAND` and the internal command-tracking variables. Shell `exit`/`exec` may return `terminal_closed` instead of a prompt-generated result. `command:"exit"` ends the shell and retains its logs. tmux survives MCP server restarts; machine reboot or termination of the tmux server ends its sessions.
+The managed Bash uses an isolated rcfile, `PROMPT_COMMAND`, and a `DEBUG` trap to track prompt readiness. Preserve these hooks and the internal command-tracking variables. A private PTY marker lets the logger confirm completion only after preceding command output is written; bookkeeping markers are omitted from returned output. `outputEndCursor` identifies that confirmed boundary when available. Shell `exit`/`exec` may return `terminal_closed` after log drainage instead of a prompt-generated result. `command:"exit"` ends the shell and retains its logs. tmux survives MCP server restarts; machine reboot or termination of the tmux server ends its sessions.
+
+After upgrading, newly opened terminals use the current hooks and logging protocol. Existing terminals keep their running shell/logger and their prior completion protocol; create a new session to use the output acknowledgement guarantee.
 
 Inside a managed shell, use its configured terminal root to manage sessions. For an external terminal, get the resolved path from `config.mjs show`:
 
@@ -142,6 +144,8 @@ Pass `--config /absolute/config.json` for a separate deployment. The list report
 
 By default the server checks every 30 seconds and reclaims exited sessions or shells idle for five minutes. Idle age starts from the latest use or command completion, not command start. Running commands, shell child processes (including background jobs), attached clients, manually added windows/panes, unknown owners and kept sessions are protected. Cross-process `flock` locks serialize managed command submission with cleanup; candidates are checked again before removal. Only tmux sessions are reclaimed: output logs, command records and files remain available. No default-socket tmux sessions are touched.
 
+Idle reclamation also requires a current prompt marker, invalidated before commands entered through either MCP input or a tmux client. This protects builtins such as `read` that have no child processes. Older shells without the readiness hook are kept until explicitly closed or exited.
+
 Configure `terminal.idleTtlMs` (default `300000`; `0` disables idle reclamation) and `terminal.gcIntervalMs` (default `30000`). To retain an idle shell intentionally, use its returned ID:
 
 ```bash
@@ -156,7 +160,7 @@ Read the resolved terminal root from `config.mjs show` when operating outside an
 
 `get_file({path:"/absolute/result.png"})` returns original bytes and a SHA256 checksum. Small raster images use MCP image content; other files use embedded resources. Default direct-file response budget is 1 MiB. Text inspection, editing, uploads, and checksums can also use shell commands.
 
-For a large file, start with `{path,offset:0,maxBytes:1048576}` and continue with `offset:nextOffset` until `eof:true`. Results include `totalBytes` and a chunk checksum (`sha256Scope:"chunk"`). Concatenate decoded resource blobs in offset order. Fetch a whole-file checksum with `sha256sum` when verification across chunks is needed. Full-file results have `sha256Scope:"file"`.
+For a large file, start with `{path,offset:0,maxBytes:1048576}` and continue with `offset:nextOffset` until `eof:true`. Omitting `maxBytes` uses at most 1 MiB per chunk, including when the direct-file budget is larger. Results include `totalBytes` and a chunk checksum (`sha256Scope:"chunk"`). Concatenate decoded resource blobs in offset order. Fetch a whole-file checksum with `sha256sum` when verification across chunks is needed. Full-file results have `sha256Scope:"file"`.
 
 ## HTTP transfer compression
 
@@ -172,7 +176,7 @@ Compression saves network bytes. It does not reduce text after the client decode
 
 Raw logs rotate in 8 MiB segments. By default all segments are retained. `logs.maxSegments` enables retention; `earliestCursor`/`droppedBytes` report removed history. Closed terminal logs are retained for manual archival. HTTP metadata audit is separately capped at eight 8 MiB segments and drops excess queued entries with a counter.
 
-Defaults allow 32 live terminals, 32 batch jobs, and 128 HTTP MCP sessions. Completed batch histories default to 30 days and at most 1000 stored jobs; accepting new batch jobs cleans old completed histories while preserving active ones. Old job records remain readable.
+Defaults allow 32 live terminals, 32 batch jobs, and 128 HTTP MCP sessions. New batch jobs retain a process-group supervisor until shell output drains, so TERM-to-KILL escalation and explicit deadlines remain effective after the shell exits. Completed batch histories default to 30 days and at most 1000 stored jobs; accepting new batch jobs cleans old completed histories while preserving active ones. Old job records remain readable.
 
 `/healthz` reports version, Git revision, tool profile, and tool count. `/metrics` reports HTTP/session counters. After a service restart the client needs a new MCP initialize handshake; tmux session IDs and job IDs remain valid. A client may need to refresh its connection or start a new conversation to load the updated tool schema.
 

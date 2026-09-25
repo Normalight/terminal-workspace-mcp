@@ -56,16 +56,21 @@ export class TerminalManager {
       const id = `term_${randomUUID()}`, dir = this.dir(id);
       await mkdir(path.join(dir, "commands"), { recursive: true, mode: 0o700 });
       const rc = path.join(dir, "shell.rc"), log = path.join(dir, "terminal.log"), ready = path.join(dir, "ready");
-      const meta = { sessionId: id, owner: this.owner, managerId: this.managerId, name, cwd, createdAt: new Date().toISOString(), log, logs: this.logs, cols, rows };
+      const logToken = randomUUID();
+      const meta = { sessionId: id, owner: this.owner, managerId: this.managerId, shellStateVersion: 1, outputProtocol: 1, name, cwd, createdAt: new Date().toISOString(), log, logs: this.logs, cols, rows };
       await atomicJson(path.join(dir, "meta.json"), meta);
       await atomicWrite(rc, [
         "HISTFILE=" + quote(path.join(dir, "history")),
         "PS1='mcp:\\w\\$ '", "unset PROMPT_COMMAND", "set +o history",
         "__csy_prompt() {", "  local __csy_code=$?",
         "  if [[ -n ${__csy_result_file-} ]]; then",
-        "    printf '{\"exitCode\":%d}\\n' \"$__csy_code\" > \"${__csy_result_file}.tmp\"",
-        "    command mv -- \"${__csy_result_file}.tmp\" \"$__csy_result_file\"", "    unset __csy_result_file", "  fi",
-        "  printf ready > " + quote(ready), "}", "PROMPT_COMMAND=__csy_prompt", "",
+        `    printf '\\033]777;${logToken};%s;%d\\007' "\${__csy_result_file##*/}" "$__csy_code"`,
+        "    unset __csy_result_file", "  fi",
+        "  printf ready > " + quote(ready), "  __csy_at_prompt=1", "}", "PROMPT_COMMAND=__csy_prompt",
+        "__csy_debug() {",
+        '  if [[ ${__csy_at_prompt-} == 1 && $BASH_COMMAND != __csy_prompt && ${FUNCNAME[1]-} != __csy_prompt ]]; then',
+        "    __csy_at_prompt=0", "    command rm -f -- " + quote(ready), "  fi", "}",
+        "trap '__csy_debug' DEBUG", "",
       ].join("\n"));
       const flags = [];
       for (const [key, value] of Object.entries({ ...this.env, ...env, HISTFILE: path.join(dir, "history"), MCP_TERMINAL_ROOT: this.root, MCP_TERMINAL_ADMIN: fileURLToPath(new URL("../scripts/terminals.mjs", import.meta.url)) })) {
@@ -82,7 +87,7 @@ export class TerminalManager {
         await atomicJson(path.join(dir, "meta.json"), meta);
         await this.run(["set-option", "-t", id, "remain-on-exit", "on"]);
         await this.run(["set-option", "-t", id, "history-limit", "10000"]);
-        await this.run(["pipe-pane", "-O", "-t", `${id}:0.0`, `${quote(process.execPath)} ${quote(this.logger)} ${quote(log)} ${this.logs.segmentBytes} ${this.logs.maxSegments}`]);
+        await this.run(["pipe-pane", "-O", "-t", `${id}:0.0`, `${quote(process.execPath)} ${quote(this.logger)} ${quote(log)} ${this.logs.segmentBytes} ${this.logs.maxSegments} ${quote(logToken)}`]);
         await this.run(["wait-for", "-S", gate]);
         for (let i = 0; i < 100; i++) { if (await stat(ready).then(() => true, () => false)) break; await delay(20); }
         if (!await stat(ready).then(() => true, () => false)) throw new OperationError("terminal shell did not become ready", "startup_timeout");
@@ -160,10 +165,18 @@ export class TerminalManager {
     if (!COMMAND.test(commandId)) throw new OperationError("invalid command id", "invalid_input");
     const dir = path.join(this.dir(id), "commands"), meta = await jsonFile(path.join(dir, `${commandId}.json`));
     const resultPath = path.join(dir, `${commandId}.result.json`), result = await jsonFile(resultPath, null);
-    const pane = await this.pane(id);
-    const status = result ? (result.exitCode === 0 ? "succeeded" : "failed") : pane.alive ? "running" : "terminal_closed";
+    const pane = await this.pane(id), session = await jsonFile(path.join(this.dir(id), 'meta.json'));
+    const drained = !pane.alive && session.outputProtocol === 1 ? await jsonFile(path.join(this.dir(id), 'log-drained.json'), null) : null;
+    const outputPending = !result && !pane.alive && session.outputProtocol === 1 && !drained;
+    if (outputPending && pane.pid) {
+      // tmux marks the pane dead after its PTY/pipe buffers drain, but
+      // remain-on-exit keeps the pipe open. Close it to obtain the logger's EOF
+      // acknowledgement for exit/exec.
+      await this.run(['if-shell', '-F', '-t', `${id}:0.0`, '#{pane_dead}', `pipe-pane -t '${id}:0.0'`]);
+    }
+    const status = result ? (result.exitCode === 0 ? "succeeded" : "failed") : pane.alive || outputPending ? "running" : "terminal_closed";
     const finishedAt = result ? (await stat(resultPath)).mtime.toISOString() : null;
-    return { ...meta, status, exitCode: result?.exitCode ?? pane.exitCode, finishedAt };
+    return { ...meta, status, exitCode: result?.exitCode ?? pane.exitCode, finishedAt, outputEndCursor: result?.outputEndCursor ?? drained?.outputEndCursor ?? null };
   }
   async resize(id, cols, rows) {
     integer(cols, "cols", 20, 500); integer(rows, "rows", 5, 300); await this.status(id);
@@ -173,6 +186,12 @@ export class TerminalManager {
     return this.locked(id, async () => {
       const state = await this.status(id);
       if (state.alive || state.pid) await this.run(["kill-session", "-t", id]).catch(() => {});
+      if (state.outputProtocol === 1) {
+        for (let i = 0; i < 100; i++) {
+          if (await jsonFile(path.join(this.dir(id), 'log-drained.json'), null)) break;
+          await delay(20);
+        }
+      }
       await atomicJson(path.join(this.dir(id), "closed.json"), { closedAt: new Date().toISOString() });
       return { sessionId: id, status: "closed" };
     });

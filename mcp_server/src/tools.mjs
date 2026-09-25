@@ -51,7 +51,7 @@ export function registerTools(server, { workspace: w, executor, jobs, terminals:
     try {
       let file;
       if (a.offset !== undefined) {
-        const chunk = await w.readChunk(a.path, { offset: a.offset, maxBytes: Math.min(a.maxBytes ?? config.directFileMaxBytes, config.directFileMaxBytes), encoding: "base64" });
+        const chunk = await w.readChunk(a.path, { offset: a.offset, maxBytes: Math.min(a.maxBytes ?? config.directFileMaxBytes, config.directFileMaxBytes, 1048576), encoding: "base64" });
         file = { ...chunk, data: Buffer.from(chunk.data, "base64") };
       } else {
         try { file = await w.readFileBytes(a.path, { maxBytes: Math.min(a.maxBytes ?? config.directFileMaxBytes, config.directFileMaxBytes) }); }
@@ -119,6 +119,9 @@ export function registerTools(server, { workspace: w, executor, jobs, terminals:
         page = await t.read(id, { cursor: a.cursor, maxBytes: a.maxBytes, waitMs: a.waitMs });
         const state = await t.status(id);
         tracked = state.activeCommandId ? await t.commandStatus(id, state.activeCommandId) : { status: state.alive ? "idle" : "terminal_closed", exitCode: null };
+        // Completion can arrive while read() is returning an earlier snapshot.
+        // Refresh from that same cursor after the logger acknowledges completion.
+        if (tracked.status !== 'running') page = await t.read(id, { cursor: page.cursor, maxBytes: a.maxBytes });
       }
       const state = await t.status(id);
       return result({ ...tracked, sessionId: id, cwd: state.cwd, stdout: page.content, stderr: "", nextCursor: page.nextCursor, endCursor: page.endCursor, earliestCursor: page.earliestCursor, droppedBytes: page.droppedBytes, outputTruncated: page.truncated, waitingExpired: tracked.status === "running", durationMs: Date.now() - began });

@@ -15,13 +15,13 @@ export async function jsonFile(file, fallback) {
   try { return JSON.parse(await readFile(file, "utf8")); }
   catch (error) { if (error.code === "ENOENT" && fallback !== undefined) return fallback; throw error; }
 }
-export async function atomicWrite(file, data, mode = 0o600) {
-  await mkdir(path.dirname(file), { recursive: true });
+export async function atomicWrite(file, data, mode = 0o600, { createParents = true } = {}) {
+  if (createParents) await mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.${randomUUID()}.tmp`;
   try { await writeFile(temp, data, { mode }); await rename(temp, file); }
   finally { await unlink(temp).catch(() => {}); }
 }
-export const atomicJson = (file, data) => atomicWrite(file, JSON.stringify(data, null, 2) + "\n");
+export const atomicJson = (file, data, options) => atomicWrite(file, JSON.stringify(data, null, 2) + "\n", 0o600, options);
 export class KeyedMutex {
   #tails = new Map();
   async run(key, operation) {

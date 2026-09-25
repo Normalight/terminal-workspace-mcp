@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import { LocalCommandExecutor } from "../src/local-executor.mjs";
 import { JobManager } from "../src/job-manager.mjs";
 import { fixture } from "./helpers.mjs";
-import { delay } from "../src/runtime.mjs";
+import { delay, processIdentity } from "../src/runtime.mjs";
 
 test('output pagination and wait limits keep execution alive with raw complete logs',async()=>{
  const f=await fixture();const jobs=await new JobManager({root:path.join(f.root,'jobs'),shell:f.shell}).initialize();
@@ -36,4 +36,39 @@ test('original UTF-8 bytes and split labels survive persistence and cursor reads
  assert.equal((await jobs.logs(j.jobId,{stdoutCursor:0})).stdout,'token=fixture\n中\n');
  const preview=await jobs.cleanup({retainCount:0,dryRun:true});assert(preview.removed.includes(j.jobId));await jobs.cleanup({retainCount:0});assert.equal((await jobs.list()).length,0);
  }finally{await f.cleanup();}
+});
+
+test('cancellation and deadlines kill TERM-resistant descendants after the shell exits', { timeout: 20000 }, async () => {
+ const f = await fixture();
+ const jobs = await new JobManager({ root: path.join(f.root, 'jobs'), shell: f.shell }).initialize();
+ const groups = [], children = [];
+ try {
+  for (const mode of ['cancel', 'force', 'timeout', 'parent-exit']) {
+   const pidFile = `${mode}.pid`;
+   const command = `bash --noprofile --norc -c 'trap "" TERM; echo $$ > ${pidFile}; exec sleep 30' &${mode === 'parent-exit' ? '' : ' wait'}`;
+   const job = await jobs.start({ command, cwd: f.root, env: f.env, executionTimeoutMs: mode === 'timeout' ? 400 : 0 });
+   const proc = JSON.parse(await readFile(jobs.paths(job.jobId).process, 'utf8')); groups.push(proc.pid);
+   let pid;
+   for (let i = 0; i < 100; i++) { try { pid = Number(await readFile(path.join(f.root, pidFile), 'utf8')); break; } catch {} await delay(10); }
+   assert(pid); children.push(pid);
+   let result;
+   if (mode === 'timeout') result = await jobs.wait(job.jobId, 4000);
+   else {
+    if (mode === 'force') {
+     await jobs.stop(job.jobId, { waitMs: 0 }); await delay(150);
+     assert(await processIdentity(pid), 'descendant should survive TERM before escalation');
+    }
+    result = await jobs.stop(job.jobId, { force: mode === 'force', waitMs: 4000 });
+    assert(result.stopped);
+   }
+   assert.equal(result.status, mode === 'timeout' ? 'timed_out' : 'cancelled');
+   assert.equal(await processIdentity(pid), null, `${mode}: descendant survived`);
+   assert.equal(await processIdentity(proc.pid), null, `${mode}: supervisor survived`);
+  }
+ } finally {
+  for (const pid of groups) try { process.kill(-pid, 'SIGKILL'); } catch {}
+  for (const pid of children) try { process.kill(pid, 'SIGKILL'); } catch {}
+  for (const job of await jobs.list()) await jobs.wait(job.jobId, 2000);
+  await f.cleanup();
+ }
 });

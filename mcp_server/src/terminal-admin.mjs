@@ -58,7 +58,10 @@ export class TerminalAdmin {
         const pid = panes[0].pid;
         const children = await readFile(`/proc/${pid}/task/${pid}/children`, 'utf8');
         const comm = await readFile(`/proc/${pid}/comm`, 'utf8');
-        idleShell = children.trim() === '' && comm.trim() === 'bash';
+        // Builtins such as read and while have no child process. Only a shell
+        // whose pre-command hook invalidates this prompt marker can prove idle.
+        const ready = meta?.shellStateVersion === 1 && await readFile(path.join(t.dir(name), 'ready'), 'utf8');
+        idleShell = children.trim() === '' && comm.trim() === 'bash' && ready === 'ready';
       } catch { /* Unknown process state is never eligible for idle cleanup. */ }
     }
     const state = panes.length && panes.every(p => p.dead) ? 'exited' : commandStatus === 'running' ? 'active' : idleShell ? 'idle' : 'live';

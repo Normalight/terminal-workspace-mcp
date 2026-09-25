@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Confirm terminal completion after preceding PTY output is written, and refresh output when a command finishes during polling.
+- Keep a verified process-group supervisor alive so cancellation and deadlines can terminate descendants after their shell exits.
+- Require a current Bash prompt marker for idle reclamation, protecting interactive builtins. Older shells without this hook remain protected from idle cleanup.
+- Cap default file-transfer chunks at 1 MiB even when the direct-file response budget is larger.
+
 ## 0.4.1 — 2026-09-26
 
 - Deliver server instructions in the standard MCP initialization field.

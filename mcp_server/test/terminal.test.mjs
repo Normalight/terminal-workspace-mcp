@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { mkdir } from "node:fs/promises";
 import { TerminalManager } from "../src/terminal-manager.mjs";
-import { delay } from "../src/runtime.mjs";
+import { delay, quote } from "../src/runtime.mjs";
 import { fixture } from "./helpers.mjs";
 
 test('tmux preserves cwd/env, supports prompts, Ctrl+C, resize and manager reconnect', {timeout:20000},async()=>{
@@ -21,4 +21,20 @@ test('tmux preserves cwd/env, supports prompts, Ctrl+C, resize and manager recon
  assert.equal((await next.commandStatus(id,r.commandId)).exitCode,130);
  await next.resize(id,100,30);await next.close(id);assert.equal((await next.status(id)).status,'closed');
  }finally{if(id)await t.close(id);await f.cleanup();}
+});
+
+test('exit and exec report completion only after large final output drains', { timeout: 15000 }, async () => {
+ const f = await fixture(), t = await new TerminalManager({ root: path.join(f.root, 'tmux'), env: f.env, segmentBytes: 32768 }).initialize();
+ const ids = [];
+ try {
+  for (const mode of ['exit', 'exec']) {
+   const id = (await t.open({ cwd: f.root })).sessionId; ids.push(id);
+   const command = "printf '%0200000d' 0; printf FINISHED; exit 9";
+   const r = await t.execute(id, { command: mode === 'exit' ? command : `exec /bin/bash --noprofile --norc -c ${quote(command)}`, waitMs: 3000, maxBytes: 1048576 });
+   assert.equal(r.status, 'terminal_closed'); assert.equal(r.exitCode, 9);
+   assert.match(r.output.content, /0{200000}FINISHED/);
+   assert.equal(r.output.truncated, false); assert.equal(r.output.nextCursor, r.outputEndCursor);
+   await t.close(id);
+  }
+ } finally { for (const id of ids) await t.close(id).catch(() => {}); await t.run(['kill-server']).catch(() => {}); await f.cleanup(); }
 });

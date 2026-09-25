@@ -9,6 +9,40 @@ import { TerminalAdmin } from '../src/terminal-admin.mjs';
 import { atomicJson, delay } from '../src/runtime.mjs';
 import { fixture } from './helpers.mjs';
 
+test('interactive and directly typed builtins are protected until the prompt returns', { timeout: 15000 }, async () => {
+  const f = await fixture(), t = await new TerminalManager({ root: path.join(f.root, 'tmux'), env: f.env }).initialize();
+  const admin = new TerminalAdmin(t), policy = () => ({ apply: true, idleTtlMs: 300000, now: Date.now() + 360000 });
+  const ids = [];
+  try {
+    for (const direct of [false, true]) {
+      const id = (await t.open({ cwd: f.root })).sessionId;
+      ids.push(id);
+      await t.execute(id, { command: 'true', waitMs: 1000 });
+      const command = 'read -r -p "WAIT_FOR_ANSWER> " answer';
+      if (direct) await t.run(['send-keys', '-t', `${id}:0.0`, command, 'Enter']);
+      else await t.write(id, { input: command + '\n' });
+      for (let i = 0; i < 100; i++) {
+        if ((await t.read(id, { cursor: 0 })).content.includes('WAIT_FOR_ANSWER> ')) break;
+        await delay(10);
+      }
+      assert(!(await admin.cleanup(policy())).removed.includes(id));
+      assert((await t.pane(id)).alive);
+      await t.write(id, { input: 'answer\n' });
+      for (let i = 0; i < 100; i++) {
+        if (await readFile(path.join(t.dir(id), 'ready'), 'utf8').catch(() => '') === 'ready') break;
+        await delay(10);
+      }
+      assert((await admin.cleanup(policy())).removed.includes(id));
+    }
+    // A shell created by an older release cannot prove its prompt is current.
+    const id = (await t.open({ cwd: f.root })).sessionId;
+    ids.push(id);
+    const metaFile = path.join(t.dir(id), 'meta.json'), meta = JSON.parse(await readFile(metaFile, 'utf8'));
+    delete meta.shellStateVersion; await atomicJson(metaFile, meta);
+    assert(!(await admin.cleanup(policy())).removed.includes(id)); assert((await t.pane(id)).alive);
+  } finally { for (const id of ids) await t.close(id).catch(() => {}); await t.run(['kill-server']).catch(() => {}); await f.cleanup(); }
+});
+
 test('terminal ownership, legacy recognition, previews and idle cleanup protect live work', {timeout:30000}, async () => {
   const f = await fixture(), t = await new TerminalManager({root:path.join(f.root,'tmux'),env:f.env}).initialize(), admin = new TerminalAdmin(t);
   const ids = []; let attachedClient;
