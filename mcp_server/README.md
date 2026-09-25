@@ -69,6 +69,10 @@ For foreground operation, use `node mcp_server/src/server.mjs`; stdio uses `node
 
 Managed sockets, metadata, logs, temporary files, and child package caches live under the configured workspace. Follow the task's filesystem constraints for command output paths. Child processes inherit the configured paths, with MCP/control-plane authentication variables omitted.
 
+## Connect from ChatGPT
+
+See the [ChatGPT deployment and update guide](CHATGPT.md) ([中文](CHATGPT.zh-CN.md)) for Secure MCP Tunnel setup, authentication, developer-mode registration, and refreshing saved tool definitions. The included plugin connection files configure compatible clients; generating them does not update an existing ChatGPT connection. This server implements a static local Bearer token, not an OAuth authorization server.
+
 ## Execute and interact
 
 Start a shell and keep its returned `sessionId`:

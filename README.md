@@ -41,6 +41,12 @@ Configure your MCP client to use Streamable HTTP, that URL, and the header `Auth
 
 For a persistent local token, put `{"auth":{"token":"your-token"}}` in `mcp_server/config.local.json` with file mode 0600. That file is ignored by Git. The server reads `config.json`, its local overlay, then explicit environment overrides.
 
+## Connect from ChatGPT
+
+Follow the [ChatGPT deployment and update guide](mcp_server/CHATGPT.md). It covers Secure MCP Tunnel, local Bearer authentication, developer-mode setup, refreshing tool definitions, and checking the running version.
+
+ChatGPT connects to the running service through a tunnel or reachable HTTPS endpoint. Pushing this repository to GitHub does not deploy the service or refresh a saved ChatGPT connection. The generic Bearer-header example above is for clients that accept custom headers; ChatGPT's public HTTPS connection requires a compatible authentication gateway for this server.
+
 ## Use the two tools
 
 Start a terminal:
