@@ -92,3 +92,21 @@ If runtime checks report the expected version but ChatGPT still advertises older
 | Tunnel disconnects | Tunnel client process, outbound connectivity, and runtime key. |
 | New code, old tools | Refresh the saved connection and use a new conversation. |
 | Public HTTPS fails authentication | Implement the OAuth gateway; a local token environment variable is not a ChatGPT credential setting. |
+
+### A tool stays pending, then `stream recovery polling timed out` appears
+
+The browser message alone does not establish that the terminal command failed, or that the browser received its result. Correlate the affected call's time with the MCP HTTP audit and tunnel response records. OpenAI's [troubleshooting guide](https://developers.openai.com/plugins/deploy/troubleshooting) separates server, streaming-proxy and ChatGPT-client checks; it does not specify a fixed timeout for this error.
+
+For long commands, use a stable `terminalKey`, submit with `waitMs=1000` and `maxBytes=16384`, and save `sessionId`, `commandId` and `nextCursor`. Read the saved command with `waitMs=5000` and no `command`. After a lost submission reply, inspect the original key before deciding whether anything needs to run. Short waits and bounded pages reduce time spent in each tool request; they do not guarantee recovery of ChatGPT's answer stream. Saved task IDs remain usable in a new conversation.
+
+If the host returns `Unknown tool` without a corresponding local request, check the selected plugin and refresh discovery in a new conversation. That error is separate from terminal execution.
+
+Collect the affected time window, including its timezone (replace these example times):
+
+```bash
+python3 -B mcp_server/scripts/diagnose_transport.py \
+  --since 2026-09-26T23:00:00+08:00 \
+  --until 2026-09-26T23:10:00+08:00
+```
+
+Reports go to workspace-local `outputs/mcp-diagnostics`; pass `--config` for another deployment. The audit includes retained rotated segments and requests overlapping the window, with no command bodies or authorization headers. Tunnel counters remain cumulative since process start. HTTP 200 alone establishes neither tool success nor browser receipt. Missing records can also mean the relevant audit data was not retained.

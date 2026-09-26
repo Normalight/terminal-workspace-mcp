@@ -267,6 +267,8 @@ Defaults allow 32 live terminals, 32 batch jobs, and 128 HTTP MCP sessions. New 
 
 `/healthz` reports version, Git revision, tool profile, and tool count. `/metrics` reports HTTP/session counters. After a service restart the client needs a new MCP initialize handshake; tmux session IDs and job IDs remain valid. A client may need to refresh its connection or start a new conversation to load the updated tool schema.
 
+`python3 -B mcp_server/scripts/diagnose_transport.py --since <ISO-time> --until <ISO-time>` collects health, tunnel metrics and retained HTTP audit metadata for an incident. Timestamps must include a timezone. Only the audit is windowed; tunnel counters are cumulative. The report preserves transport-status labels and separates HTTP completion from tool success or browser receipt. See [ChatGPT troubleshooting](CHATGPT.md#troubleshooting) for pending tools and browser stream-recovery errors.
+
 The service helper reads the same configuration by default; `--config` selects another deployment. Its state file records the selected config path. `--component relay` manages the optional relay with its own pid/logs; the default component is the MCP server. `config.mjs show` prints effective paths and settings without credential values.
 
 The helper detaches the process and writes pid/logs in the workspace. It is not a boot-time supervisor. Deployment can continue using an existing host process manager.

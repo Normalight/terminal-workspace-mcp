@@ -5,8 +5,69 @@ import argparse, collections, datetime, json, re, subprocess, shutil, urllib.req
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 
 def redact(text):
-    text = re.sub(r'tunnel_[A-Za-z0-9_-]+', '<tunnel>', text)
+    # Redact identifiers inside label values/URLs, not metric names such as
+    # tunnel_status_code or tunnel_id. Replacing those destroys diagnostics.
+    text = re.sub(r'(?<=["/])tunnel_[A-Za-z0-9_-]+', '<tunnel>', text)
     return re.sub(r'(Bearer\s+|sk-)[^\s"\']+', '<redacted>', text)
+
+def utc_time(value):
+    try:
+        result = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+        if result.tzinfo is None: raise ValueError('timezone required')
+        return result.astimezone(datetime.timezone.utc)
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise ValueError('use an ISO timestamp with Z or a timezone offset') from exc
+
+def audit_summary(log, since=None, until=None):
+    """Summarize retained metadata, including requests overlapping the window."""
+    files = sorted([p for p in log.parent.glob(log.name + '*')
+                    if p.name == log.name or re.fullmatch(re.escape(log.name) + r'\.\d{9}', p.name)])
+    rows, events, statuses = [], collections.Counter(), collections.Counter()
+    malformed = 0
+    first = last = None
+    fields = ['timestamp', 'event', 'requestId', 'httpMethod', 'rpcMethod', 'toolName', 'session',
+              'statusCode', 'durationMs', 'requestBytes', 'responseBytes', 'responseFinished']
+    for file in files:
+        try:
+            with file.open(errors='replace') as source:
+                for line in source:
+                    try:
+                        row = json.loads(line)
+                        end = utc_time(row['timestamp'])
+                        duration = max(0, float(row.get('durationMs', 0)))
+                        start = end - datetime.timedelta(milliseconds=duration)
+                    except (ValueError, KeyError, TypeError, OverflowError):
+                        malformed += 1; continue
+                    first = min(first, end) if first else end
+                    last = max(last, end) if last else end
+                    if (since and end < since) or (until and start > until): continue
+                    if row.get('event'): events[row['event']] += 1
+                    if row.get('httpMethod'):
+                        statuses[f"{row['httpMethod']} {row.get('rpcMethod') or '-'} {row.get('statusCode') or 'no_response'}"] += 1
+                    rows.append({key: row[key] for key in fields if key in row})
+        except FileNotFoundError:
+            continue  # Retention can remove a segment during a snapshot.
+    calls = [r for r in rows if r.get('rpcMethod') == 'tools/call']
+    return {'scope': 'retained HTTP metadata; HTTP 200 does not prove tool success or browser receipt',
+            'since': since.isoformat() if since else None, 'until': until.isoformat() if until else None,
+            'retainedFrom': first.isoformat() if first else None, 'retainedThrough': last.isoformat() if last else None,
+            'files': len(files), 'malformedLines': malformed, 'matchingRecords': len(rows),
+            'events': dict(events), 'requests': dict(statuses),
+            'slowestToolRequests': sorted(calls, key=lambda r: r.get('durationMs', 0), reverse=True)[:10],
+            'recentMetadata': rows[-100:], 'omittedMetadata': max(0, len(rows) - 100)}
+
+def request_counts(metrics):
+    # New tunnel versions report durations where older ones exposed body sizes.
+    # Select one family to avoid counting the same HTTP request twice.
+    duration = [r for r in metrics if r['name'] == 'http_client_request_duration_seconds_count']
+    source = duration or [r for r in metrics if r['name'] == 'http_client_request_body_size_bytes_count']
+    counts = collections.Counter()
+    for row in source:
+        labels = row['labels']
+        key = ' '.join([labels.get('server_address', ''), labels.get('http_request_method', ''),
+                        labels.get('http_route', ''), labels.get('http_response_status_code', 'no_response_status')])
+        counts[key] += row['value']
+    return dict(counts)
 
 def fetch(url):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -20,7 +81,7 @@ def fetch(url):
     except Exception as exc:
         return {'error_type': type(exc).__name__, 'text': ''}
 
-def snapshot(out, loaded):
+def snapshot(out, loaded, since=None, until=None):
     ROOT = Path(loaded['config']['workspaceRoot'])
     tunnel = loaded['config']['diagnostics']['tunnelUrl'].rstrip('/')
     out = out.resolve()
@@ -40,9 +101,10 @@ def snapshot(out, loaded):
         if name.endswith('_bucket'): continue
         labels = dict(re.findall(r'([a-zA-Z_][a-zA-Z_0-9]*)="([^"]*)"', labels or ''))
         labels = {k:v for k,v in labels.items() if not k.startswith('otel_') and k != 'tunnel_id'}
-        if name.startswith('http_client_request_body_size_bytes_') or name in ['commands_poll_cycles_total','commands_poll_errors_total','commands_poll_last_successful_timestamp_seconds','commands_queue_length','commands_queue_capacity','dispatcher_worker_pool_occupancy','dispatcher_worker_pool_capacity','process_start_time_seconds','process_resident_memory_bytes']:
+        if name.startswith(('http_client_request_body_size_bytes_', 'http_client_request_duration_seconds_', 'command_end_to_end_latency_milliseconds_', 'commands_poll_latency_seconds_')) or name in ['commands_poll_cycles_total','commands_poll_errors_total','commands_poll_last_successful_timestamp_seconds','commands_queue_length','commands_queue_capacity','dispatcher_worker_pool_occupancy','dispatcher_worker_pool_capacity','process_start_time_seconds','process_resident_memory_bytes']:
             metrics.append({'name':name,'labels':labels,'value':float(value)})
     data['metrics'] = metrics
+    data['httpAudit'] = audit_summary(Path(loaded['config']['paths']['audit']), since, until)
     log = Path(loaded['config']['paths']['service'])/'server.stderr.log'
     if log.is_file():
         lines=log.read_text(errors='replace').splitlines();events=[]
@@ -56,16 +118,16 @@ def snapshot(out, loaded):
     (out/f'{name}.json').write_text(json.dumps(data,ensure_ascii=False,indent=2))
     (out/'latest.json').write_text(json.dumps(data,ensure_ascii=False,indent=2))
     (out/f'{name}.prom').write_text(text)
-    counts={}
-    for row in metrics:
-        if row['name']=='http_client_request_body_size_bytes_count':
-            l=row['labels']; key=' '.join([l.get('server_address',''),l.get('http_request_method',''),l.get('http_route',''),l.get('http_response_status_code','no_response_status')]);counts[key]=row['value']
-    print(json.dumps({'timestamp_utc':stamp,'saved':str(out/f'{name}.json'),'health':{k:data[k] for k in ['mcp_health','tunnel_health','tunnel_ready']},'http_request_counts':counts},ensure_ascii=False))
+    print(json.dumps({'timestamp_utc':stamp,'saved':str(out/f'{name}.json'),'health':{k:data[k] for k in ['mcp_health','tunnel_health','tunnel_ready']},'http_request_counts':request_counts(metrics),
+                      'audit_requests':data['httpAudit']['requests'],'audit_events':data['httpAudit']['events']},ensure_ascii=False))
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--config');parser.add_argument('--output')
+    parser.add_argument('--since', type=utc_time, help='incident window start, ISO timestamp with timezone')
+    parser.add_argument('--until', type=utc_time, help='incident window end; tunnel counters remain cumulative')
     args=parser.parse_args()
+    if args.since and args.until and args.since > args.until: parser.error('--since must not follow --until')
     command=[shutil.which('node') or 'node',str(SOURCE_ROOT/'mcp_server/scripts/config.mjs'),'show']
     if args.config:command.extend(['--config',args.config])
     loaded=json.loads(subprocess.run(command,check=True,capture_output=True,text=True).stdout)
-    snapshot(Path(args.output or Path(loaded['config']['workspaceRoot'])/'outputs/mcp-diagnostics'),loaded)
+    snapshot(Path(args.output or Path(loaded['config']['workspaceRoot'])/'outputs/mcp-diagnostics'),loaded,args.since,args.until)

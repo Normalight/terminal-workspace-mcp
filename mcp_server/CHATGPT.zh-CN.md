@@ -92,3 +92,23 @@ curl --noproxy '*' -fsS http://127.0.0.1:5679/healthz
 | 隧道断线 | 客户端进程、出站网络及运行密钥。 |
 | 服务已更新但工具仍旧 | 刷新已保存的连接，并新开对话。 |
 | 公网 HTTPS 认证失败 | 配置 OAuth 网关；本地 token 环境变量不是 ChatGPT 的凭据设置。 |
+
+### 工具卡住后显示 `stream recovery polling timed out`
+
+这条网页报错本身不能证明终端命令超时或失败，也不能证明结果已经送到浏览器。需要将卡住那次调用的时间与 MCP 请求审计、隧道响应记录对应起来。OpenAI 的[排查文档](https://developers.openai.com/plugins/deploy/troubleshooting)要求分别检查服务、流式代理和 ChatGPT 客户端；它没有定义这条错误的固定超时阈值。
+
+长任务采用短等待、保存 ID、分次续读。可在对话中使用以下要求：
+
+> 使用稳定 terminalKey，提交命令时 waitMs=1000、maxBytes=16384。保存 sessionId、commandId、nextCursor。未完成则用这些 ID 和游标续读，waitMs=5000；不要再次提交原命令。网页报错后也先查询原任务；若提交回执丢失，先按 terminalKey 查询状态。
+
+这能缩短每次工具请求的等待，并减少返回体大小；不能保证修复 ChatGPT 网页内部的回答流恢复。重开对话后仍可按保存的 ID 读取原任务。若报 `Unknown tool` 且本机没有收到相应请求，应检查所选插件、刷新工具发现并在新对话验证；这与终端任务是否运行是不同问题。
+
+保留发生时间和时区，在仓库根目录收集指定时间窗的诊断（替换示例时间）：
+
+```bash
+python3 -B mcp_server/scripts/diagnose_transport.py \
+  --since 2026-09-26T23:00:00+08:00 \
+  --until 2026-09-26T23:10:00+08:00
+```
+
+报告保存到工作区 `outputs/mcp-diagnostics`；自定义部署传 `--config`。HTTP 审计包含保留的轮转片段及跨时间窗的请求，不包含命令正文或认证头。隧道计数仍是进程启动以来的累计值，不能当作该时间窗的错误次数。HTTP 200 也不等于工具业务成功或浏览器已经收到。若没有对应请求，仍需排除审计保留范围之外或日志丢失的情况。
