@@ -75,6 +75,8 @@ python3 -B mcp_server/scripts/services.py status --component all
 
 多个 agent 可同时使用独立 MCP 连接；不同任务使用不同 terminalKey，同终端只允许一条活动命令，多读者各自保存游标。已验证 6 个客户端并发及 MCP 重启后的共同恢复。任务键用于协调，不是权限隔离；所有客户端共享服务账号权限。
 
+常规服务更新会先返回正在等待的任务状态与游标（serverRestarting:true），然后关闭旧连接；任务继续运行。配套客户端自动重建连接、恢复订阅和续读。只有服务明确证明尚未派发的拒绝可以重试提交；进程崩溃或回执丢失仍按提交不明处理。连接恢复和工具定义刷新是两回事，宿主缓存了旧参数时需重新发现工具。
+
 ## 长任务与会话回收
 
 长任务只启动一次。返回 `status: running` 后，当前 MCP 连接会自动订阅完成通知。调用方保持 GET SSE 或 stdio 监听，服务端通过 `notifications/message` 推送 `logger: terminal-workspace.completion`、`level: notice`、`data.event: command_completed`，包含任务标识、状态、退出码及终端输出结束游标。收到后用保存的 `sessionId`、`commandId` 和 `nextCursor` 续读剩余输出，不再传 `command`。

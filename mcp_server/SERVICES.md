@@ -38,7 +38,7 @@ python3 -B mcp_server/scripts/services.py status --component all
 
 Pass the same `--config` on every command for a separate deployment. Linger keeps the user manager available after logout and starts it at boot; authorization depends on the host. A machine reboot restarts services but cannot resume the old tmux processes.
 
-Use `restart --component server` for MCP updates. `restart --component all` restarts network components while keeping tmux running. The helper refuses `stop`/`restart --component terminals`; use systemctl deliberately only after inspecting active tasks. After installation, the older `service.py` entry point delegates to the supervisor. Before installation it remains a local detached development launcher, with no promise of survival after its caller's cgroup is removed.
+Use `restart --component server` for MCP updates. The MCP process drains finite replies before exit: pending terminal/batch waits return early with saved task state and `serverRestarting:true`, while tasks continue. New calls receive an explicit pre-dispatch rejection, allowing the reconnecting client to reinitialize after the update. This graceful path does not apply to SIGKILL, power loss or a process crash. `restart --component all` restarts network components while keeping tmux running. The helper refuses `stop`/`restart --component terminals`; use systemctl deliberately only after inspecting active tasks. After installation, the older `service.py` entry point delegates to the supervisor. Before installation it remains a local detached development launcher, with no promise of survival after its caller's cgroup is removed.
 
 ## Migrate a running deployment
 

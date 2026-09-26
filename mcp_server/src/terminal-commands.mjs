@@ -4,6 +4,7 @@ import path from 'node:path';
 import { atomicJson, atomicWrite, delay, integer, jsonFile, OperationError, processIdentity, quote } from './runtime.mjs';
 import { readLog } from './log-store.mjs';
 import { activeStatus, blocksSubmission, readCommandOutput } from './terminal-output.mjs';
+import { checkSubmission } from './server-lifecycle.mjs';
 
 const COMMAND = /^cmd_[a-f0-9-]{36}$/;
 async function fallbackEnd(base, meta, session) {
@@ -26,10 +27,11 @@ export async function collectorState(manager, session, pane) {
   return { alive: !!pane.pipeActive, status: 'legacy' };
 }
 
-export async function submitCommand(manager, id, { command, waitMs = 1000, maxBytes = 65536 } = {}) {
+export async function submitCommand(manager, id, { command, waitMs = 1000, maxBytes = 65536, signal } = {}) {
   if (typeof command !== 'string' || !command.trim() || command.length > 20000) throw new OperationError('command must be 1..20000 characters', 'invalid_input');
   integer(waitMs, 'waitMs', 0, 30000);
   const commandId = await manager.locked(id, async () => {
+    checkSubmission(signal);
     const state = await manager.status(id);
     if (!state.alive) throw new OperationError('terminal is closed; inspect saved command IDs before starting a replacement', 'terminal_closed');
     if (state.activeCommandId && blocksSubmission((await manager.commandStatus(id, state.activeCommandId)).status)) {
@@ -46,6 +48,7 @@ export async function submitCommand(manager, id, { command, waitMs = 1000, maxBy
     }
     const cid = `cmd_${randomUUID()}`, directory = path.join(manager.dir(id), 'commands'), base = path.join(directory, cid);
     const tail = await readLog(state.log, { maxBytes: 4, segmentBytes: state.logs.segmentBytes });
+    checkSubmission(signal);
     const meta = { commandId: cid, sessionId: id, command, cwd: state.cwd, submittedAt: new Date().toISOString(),
       startedAt: null, startCursor: tail.endCursor, submissionProtocol: 1 };
     await atomicWrite(base + '.sh', command + '\n');
@@ -72,7 +75,7 @@ export async function submitCommand(manager, id, { command, waitMs = 1000, maxBy
     return cid;
   });
   const deadline = Date.now() + waitMs;
-  while (activeStatus((await manager.commandStatus(id, commandId)).status) && Date.now() < deadline) await delay(20);
+  while (activeStatus((await manager.commandStatus(id, commandId)).status) && Date.now() < deadline && !signal?.aborted) await delay(20);
   return readCommandOutput(manager, id, commandId, { waitMs: 0, maxBytes });
 }
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 — 2026-09-26
+
+- Drain finite MCP responses before a planned restart; return running task IDs/cursors with `serverRestarting:true` while leaving execution alive.
+- Reject new calls during draining before dispatch and let the reconnecting client retry only the origin's explicit rejection. Generic gateway 503s remain uncertain.
+- Interrupt terminal and batch wait loops during service updates, preserve active tasks and restore monitoring on the new connection.
+
 ## 0.5.0 — 2026-09-26
 
 - Bound default output to the saved command, preserve missing-byte evidence, and distinguish command completion from output completeness. Explicit terminal scope retains PTY tail reads.

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { atomicJson, delay, integer, jsonFile, KeyedMutex, OperationError, processIdentity, signalProcess } from "./runtime.mjs";
 import { DEFAULT_SEGMENT_BYTES, readLog } from "./log-store.mjs";
+import { checkSubmission } from './server-lifecycle.mjs';
 
 export const TERMINAL_STATES = new Set(["succeeded", "failed", "failed_to_start", "cancelled", "timed_out"]);
 export class JobManager {
@@ -29,16 +30,18 @@ export class JobManager {
     }
     return rows.sort((a,b) => b.createdAt.localeCompare(a.createdAt));
   }
-  async start({ command, cwd, cwdLabel = cwd, env = process.env, executionTimeoutMs = 0 }) {
+  async start({ command, cwd, cwdLabel = cwd, env = process.env, executionTimeoutMs = 0, signal }) {
     if (typeof command !== "string" || !command.trim() || command.length > 20000) throw new OperationError("command must be 1..20000 characters", "invalid_input");
     integer(executionTimeoutMs, "executionTimeoutMs", 0, 2147483647);
     return this.lock.run("store", async () => {
+      checkSubmission(signal);
       await this.cleanup({ retainCount: this.maxJobs - 1 });
       const rows = await this.metadata();
       if (rows.length >= this.maxJobs) throw new OperationError("job store is full of active tasks", "capacity");
       let running = 0;
       for (const row of rows) if (!await jsonFile(this.paths(row.jobId).result, null)) running++;
       if (running >= this.maxRunning) throw new OperationError("running job limit reached", "capacity");
+      checkSubmission(signal);
       const jobId = `job_${randomUUID()}`, p = this.paths(jobId), createdAt = new Date().toISOString();
       await mkdir(p.dir, { mode: 0o700 });
       const meta = { jobId, commandId: jobId, status: "starting", command, cwd: cwdLabel, createdAt, logs: this.logsConfig, executionTimeoutMs,
@@ -75,11 +78,11 @@ export class JobManager {
     }
     return { ...meta, status: proc ? "running" : "starting", pid: proc?.pid ?? null, runnerAlive, processAlive };
   }
-  async wait(jobId, waitMs = 30000) {
+  async wait(jobId, waitMs = 30000, { signal } = {}) {
     integer(waitMs, "waitMs", 0, 120000);
     const until = Date.now() + waitMs;
     let result;
-    do { result = await this.status(jobId); if (TERMINAL_STATES.has(result.status) || Date.now() >= until) return result; await delay(40); } while (true);
+    do { result = await this.status(jobId); if (TERMINAL_STATES.has(result.status) || Date.now() >= until || signal?.aborted) return result; await delay(40); } while (true);
   }
   async logs(jobId, { stream = "both", maxBytes = 65536, stdoutCursor, stderrCursor } = {}) {
     const p = this.paths(jobId), status = await this.status(jobId);

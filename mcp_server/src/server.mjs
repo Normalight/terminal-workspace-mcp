@@ -20,11 +20,13 @@ import { Workspace, WorkspaceError } from "./workspace.mjs";
 import { serviceLogging } from "./service-logging.mjs";
 import { terminalDescription } from "./terminal-tool.mjs";
 import { loadConfig } from "./config.mjs";
+import { ServerLifecycle, restartingCode, rejectedRecovery } from './server-lifecycle.mjs';
 
 const deployment = loadConfig(process.env.MCP_ISOLATED_SERVICE === '1' ? { env: { MCP_CONFIG_FILE: process.env.MCP_CONFIG_FILE } } : undefined);
 const settings = deployment.config;
 const noHttp = process.env.MCP_ISOLATED_SERVICE !== '1' && process.env.MCP_NO_HTTP === '1';
 const finishLogging = serviceLogging("server", settings.paths.service);
+const lifecycle = new ServerLifecycle();
 Object.assign(process.env, deployment.env);
 const workspaceRoot = settings.workspaceRoot;
 const { host, port, path: endpoint, allowAnonymous } = settings.http;
@@ -59,7 +61,7 @@ const terminalGcTimer = setInterval(async () => {
 terminalGcTimer.unref();
 let revision = "unknown";
 try { revision = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8", timeout: 2000 }).trim(); } catch {}
-const version = "0.5.0";
+const version = "0.5.1";
 const maxSessions = settings.http.sessions.max;
 let toolCount = 0;
 const startedAt = Date.now();
@@ -116,7 +118,7 @@ export function createMcpServer() {
   });
   server.server.onclose = () => completions.close();
   registerTools(server, { workspace, executor: localExecutor, jobs: jobManager, terminals: terminalManager, completions,
-    config: { enableTerminal, enableWrite, directFileMaxBytes, childEnv, version, toolProfile },
+    config: { enableTerminal, enableWrite, directFileMaxBytes, childEnv, version, toolProfile, waitSignal: lifecycle.signal },
     diagnostics: async () => ({ version, revision, toolCount, toolProfile, workspace: workspace.root, writesEnabled: enableWrite, terminalEnabled: enableTerminal, sessions: sessionStats(), counters: runtimeCounters, auditDropped, jobs: await jobManager.list({ limit: 10 }), limits: { maxSessions, directFileMaxBytes, ...logsConfig } }),
   });
   toolCount = Object.keys(server._registeredTools).length;
@@ -161,6 +163,7 @@ async function readBody(req) {
 }
 
 async function handleMcp(req, res) {
+  if (req.method !== 'GET') lifecycle.track(res);
   const requestId = randomUUID();
   const began = Date.now();
   runtimeCounters.httpRequests += 1;
@@ -222,6 +225,10 @@ async function handleMcp(req, res) {
   }
   if (!hostAllowed(req)) {
     sendJson(res, 403, { error: "host is not allowed" });
+    return;
+  }
+  if (lifecycle.draining && req.method !== 'DELETE') {
+    sendJson(res, 503, { error: 'MCP service restarting', code: restartingCode, recovery: rejectedRecovery }, { 'retry-after': '1' });
     return;
   }
 
@@ -343,6 +350,7 @@ if (!noHttp) {
         directFileMaxBytes,
         terminalCleanup: { idleTtlMs: settings.terminal.idleTtlMs, gcIntervalMs: settings.terminal.gcIntervalMs },
         uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
+        draining: lifecycle.draining,
         sessions: sessionStats(),
         counters: runtimeCounters,
         jobRoot,
@@ -389,8 +397,11 @@ if (!noHttp) {
   gcTimer.unref();
 
   async function shutdown() {
+    if (lifecycle.draining) return;
     clearInterval(terminalGcTimer);
     clearInterval(gcTimer);
+    const drained = await lifecycle.drain();
+    await auditHttp({ event: 'service_draining', ...drained });
     for (const { transport } of sessions.values()) await transport.close().catch(() => {});
     auditWriter.end();
     httpServer.close(async () => { await finishLogging(); process.exit(0); });

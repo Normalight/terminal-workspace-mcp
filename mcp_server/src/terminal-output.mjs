@@ -4,7 +4,7 @@ import { delay, integer } from './runtime.mjs';
 export const activeStatus = status => ['running', 'starting'].includes(status);
 export const blocksSubmission = status => activeStatus(status) || ['submission_uncertain', 'unknown'].includes(status);
 
-export async function readCommandOutput(manager, id, commandId, { cursor, maxBytes = 65536, waitMs = 0 } = {}) {
+export async function readCommandOutput(manager, id, commandId, { cursor, maxBytes = 65536, waitMs = 0, signal } = {}) {
   integer(waitMs, 'waitMs', 0, 30000);
   await manager.touch(id);
   const until = Date.now() + waitMs;
@@ -28,7 +28,7 @@ export async function readCommandOutput(manager, id, commandId, { cursor, maxByt
     const outputGap = page.droppedBytes > 0 || tracked.outputStatus === 'incomplete';
     const output = { ...page, outputScope: 'command', outputFormat: 'pty', outputGap,
       outputComplete: !activeStatus(tracked.status) && !page.truncated && !outputGap && tracked.outputStatus === 'complete' };
-    if (page.content || !activeStatus(tracked.status) || Date.now() >= until) return { ...tracked, output };
+    if (page.content || !activeStatus(tracked.status) || Date.now() >= until || signal?.aborted) return { ...tracked, output };
     await delay(Math.min(40, Math.max(0, until - Date.now())));
   }
 }

@@ -10,12 +10,12 @@ export class LocalCommandExecutor {
     this.auditLogger = auditLogger;
     this.jobs = jobManager ?? new JobManager({ root: jobRoot ?? path.resolve("outputs/mcp-jobs"), shell });
   }
-  async execute({ command, cwd, cwdLabel = cwd, timeoutMs = 30000, waitMs = timeoutMs, executionTimeoutMs = 0, maxOutputBytes = this.maxOutputBytes, env = process.env, tool = "execute_command" }) {
+  async execute({ command, cwd, cwdLabel = cwd, timeoutMs = 30000, waitMs = timeoutMs, executionTimeoutMs = 0, maxOutputBytes = this.maxOutputBytes, env = process.env, tool = "execute_command", signal }) {
     integer(waitMs, "waitMs", 0, this.maxTimeoutMs); integer(maxOutputBytes, "maxOutputBytes", 1024, this.maxOutputBytes);
     await this.jobs.initialize();
     const started = Date.now();
-    const job = await this.jobs.start({ command, cwd, cwdLabel, env, executionTimeoutMs });
-    const state = await this.jobs.wait(job.jobId, Math.max(0, waitMs - (Date.now() - started)));
+    const job = await this.jobs.start({ command, cwd, cwdLabel, env, executionTimeoutMs, signal });
+    const state = await this.jobs.wait(job.jobId, Math.max(0, waitMs - (Date.now() - started)), { signal });
     const logs = await this.jobs.logs(job.jobId, { maxBytes: Math.floor(maxOutputBytes / 2), stdoutCursor: 0, stderrCursor: 0 });
     const result = { jobId: job.jobId, commandId: job.jobId, status: state.status, cwd: cwdLabel, command,
       stdout: logs.stdout, stderr: logs.stderr || state.error || "", exitCode: state.exitCode ?? null, signal: state.signal ?? null,

@@ -1,6 +1,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 export const requestContext = new AsyncLocalStorage();
+export const restartingRejection = body => body?.code === 'mcp_service_restarting'
+  && body.recovery?.requestAccepted === false && body.recovery?.initializeWithoutSessionId === true && body.recovery?.replayCommand === false;
 export function combineSignals(...signals) { return AbortSignal.any(signals.filter(Boolean)); }
 export function abortable(promise, signal) {
   if (!signal) return promise;
@@ -19,6 +21,14 @@ export function recoveringFetch(fetcher, { lifecycle, requestTimeoutMs, url }) {
       stream || cleanup ? undefined : requestContext.getStore()?.signal,
       stream ? undefined : AbortSignal.timeout(cleanup ? 2000 : requestTimeoutMs));
     const response = await fetcher(target, { ...options, signal });
+    if (response.status === 503 && options.method === 'POST' && new URL(target).href === url.href) {
+      const body = await response.clone().json().catch(() => null);
+      if (restartingRejection(body)) {
+        await response.body?.cancel();
+        const error = new Error('Origin is restarting and rejected this request before dispatch');
+        error.code = 503; error.submissionRejected = true; error.retryAfterMs = 1000; throw error;
+      }
+    }
     if (response.status === 404 && options.method === 'POST' && new URL(target).href === url.href && new Headers(options.headers).has('mcp-session-id')) {
       const body = await response.clone().json().catch(() => null);
       if (body?.code === 'mcp_session_expired' && body.recovery?.initializeWithoutSessionId === true && body.recovery?.replayCommand === false) {

@@ -144,14 +144,14 @@ export class TerminalManager {
     for (const id of names.filter(x => ID.test(x))) { try { out.push(await this.status(id)); } catch {} }
     return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
-  async read(id, { cursor, maxBytes = 65536, waitMs = 0 } = {}) {
+  async read(id, { cursor, maxBytes = 65536, waitMs = 0, signal } = {}) {
     integer(waitMs, "waitMs", 0, 30000);
     await this.touch(id);
     const until = Date.now() + waitMs; let state, output;
     do {
       state = await this.status(id);
       output = await readLog(state.log, { cursor, maxBytes, segmentBytes: state.logs.segmentBytes, final: !state.alive });
-      if (output.content || !state.alive || Date.now() >= until) break;
+      if (output.content || !state.alive || Date.now() >= until || signal?.aborted) break;
       await delay(40);
     } while (true);
     return { sessionId: id, status: state.status, ...output };

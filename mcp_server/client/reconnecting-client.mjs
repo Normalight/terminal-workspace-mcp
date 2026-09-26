@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from 'node:timers/promises';
-import { abortable, combineSignals, recoveringFetch, requestContext } from './request-policy.mjs';
+import { abortable, combineSignals, recoveringFetch, requestContext, restartingRejection } from './request-policy.mjs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { LoggingMessageNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -106,7 +106,10 @@ export class ReconnectingTerminalClient {
     if (response.isError) {
       const error = new Error(response.content?.filter(x => x.type === 'text').map(x => x.text).join('\n') || 'Tool failed');
       error.code = 'tool_error';
-      try { const detail = JSON.parse(error.message); error.serverCode = detail.code; error.recovery = detail.recovery; } catch {}
+      try {
+        const detail = JSON.parse(error.message); error.serverCode = detail.code; error.recovery = detail.recovery;
+        if (restartingRejection(detail)) { error.submissionRejected = true; error.retryAfterMs = 1000; }
+      } catch {}
       throw error;
     }
     return response.structuredContent;
@@ -120,11 +123,11 @@ export class ReconnectingTerminalClient {
     return this.recover(async connection => {
       try { return await this.call(connection, args); }
       catch (error) {
-        if (error.sessionExpired) throw error;
+        if (error.sessionExpired || error.submissionRejected) throw error;
         if (retryable(error)) throw new SubmissionUncertainError(args, error);
         throw error;
       }
-    }, { retryIf: error => error.sessionExpired === true });
+    }, { retryIf: error => error.sessionExpired === true || error.submissionRejected === true });
   }
 
   async waitForCompletion(args, { timeoutMs = 30 * 60 * 1000 } = {}) {
@@ -135,6 +138,7 @@ export class ReconnectingTerminalClient {
     for (;;) {
       const state = await this.read({ ...args, waitMs: 0, notifyOnCompletion: true }, { signal });
       if (state.status !== 'running' && state.status !== 'starting') { this.events.delete(key); return state; }
+      if (state.serverRestarting) { await sleep(1000, undefined, { signal }); continue; }
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw Error('Completion wait expired; retain IDs/cursor and resume without command.');
       // Notifications wake promptly; bounded reconciliation also handles a lost
