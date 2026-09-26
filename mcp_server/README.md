@@ -165,13 +165,23 @@ The notification carries status and identifiers; retrieve output using `execute_
 - **Server lifecycle:** a demand-started monitor checks subscribed commands about every 500 ms while a listener exists. Terminal completion uses the persisted output-drain acknowledgement. Completed states are cached during retries. The monitor stops when empty or when the MCP session closes; active SSE listeners are protected from idle session GC. SSE is uncompressed, with SDK keep-alives and proxy-buffering disabled. No commands or output are included in notification payloads.
 - **Fallback:** a client must handle events to act on them. Receiving a notification does not itself wake an offline application or schedule another model turn. If the host does not expose notification handlers, continue polling with `{sessionId, cursor: nextCursor, waitMs: 10000}` (up to 30000 ms). Waiting expiry, output truncation and a dropped connection do not stop execution. Always verify the final status/exit code and read remaining output before reporting completion.
 
-A runnable SDK example is [examples/completion-client.mjs](examples/completion-client.mjs). It waits for a pushed event without polling and then fetches the remaining output:
+A runnable SDK example is [examples/completion-client.mjs](examples/completion-client.mjs). It listens for pushed completion, reconciles persisted task status every 30 seconds if no event arrives, and fetches remaining output:
 
 ```bash
 node mcp_server/examples/completion-client.mjs 'sleep 5; printf first' 'sleep 2; printf second'
 ```
 
-It uses the configured local HTTP endpoint and authentication; set `MCP_NOTIFICATION_URL` to exercise a relay/tunnel endpoint instead. Save the IDs it prints to re-subscribe if interrupted.
+It uses the configured local HTTP endpoint and authentication; set `MCP_NOTIFICATION_URL` to exercise a relay/tunnel endpoint instead. Before submitting, it writes a private checkpoint under `outputs/mcp-client-state/` containing its stable task key. It then saves the returned task IDs and consumed output cursor. If the client process exits, use the printed checkpoint path:
+
+```bash
+node mcp_server/examples/completion-client.mjs --resume /absolute/workspace/outputs/mcp-client-state/<id>.json
+```
+
+Resume only inspects/subscribes/reads the saved task, even when the submission reply was lost. It never submits another command or continues unsubmitted commands from the original argument list. An unconfirmed submission stops with an explicit diagnostic. A crash between writing stdout and saving its cursor may repeat that last output page.
+
+The reusable [client/reconnecting-client.mjs](client/reconnecting-client.mjs) shares one active client and initialization among concurrent readers. On session 404, network loss, timeouts, 429 or retryable 5xx, safe reads retry at most four times with exponential backoff and jitter, honoring `Retry-After`. Finite requests have a 40-second deadline; GET SSE remains open. Existing SDK reconnect handles short SSE interruptions; saved IDs and reconciliation recover completion after a new session/server restart. Authentication, argument/tool errors and `Unknown tool` stop immediately. Command/input/key requests are never replayed automatically: a lost command response raises `SubmissionUncertainError` with the saved selector, because execution may already have started. Only `read()` requests are eligible for automatic retries.
+
+This helper improves clients that adopt it. A hosted ChatGPT/Codex connector has its own transport and tool registry; origin code cannot repair an upstream `Unknown tool`. Refresh that saved connection and test a new conversation. HTTP 404 responses include recovery guidance, while `http_aborted` audit records identify replies interrupted before completion without recording command text or credentials.
 
 ### Reuse connections and reclaim short-lived sessions
 

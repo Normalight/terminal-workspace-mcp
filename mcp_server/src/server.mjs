@@ -63,7 +63,7 @@ const auditLogPath = settings.paths.audit;
 const compressionConfig = settings.http.compression;
 const runtimeCounters = {
   compressedResponses: 0, compressionOriginalBytes: 0, compressionWireBytes: 0,
-  httpRequests: 0, httpErrors: 0, sessionsCreated: 0, sessionsClosed: 0,
+  httpRequests: 0, httpErrors: 0, httpAborted: 0, sessionsCreated: 0, sessionsClosed: 0,
   sessionsExpired: 0, sessionsEvicted: 0, sessionsRejected: 0, unknownSessionRequests: 0, oversizedDirectFilesDenied: 0,
 };
 
@@ -136,6 +136,11 @@ function sendJson(res, status, body, headers = {}) {
   res.end(payload);
 }
 
+function unknownSession(res) {
+  sendJson(res, 404, { error: 'unknown MCP session', code: 'mcp_session_expired',
+    recovery: { initializeWithoutSessionId: true, resubscribeWithSavedTaskIds: true, replayCommand: false } });
+}
+
 async function readBody(req) {
   const chunks = [];
   let size = 0;
@@ -196,6 +201,14 @@ async function handleMcp(req, res) {
       ...(res.compressionStats ? { compression: res.compressionStats } : {}),
     });
   });
+  res.once('close', () => {
+    if (res.writableFinished) return;
+    if (req.method !== 'GET') runtimeCounters.httpAborted++;
+    // A missing reply does not establish that a tools/call never executed.
+    void auditHttp({ event: req.method === 'GET' ? 'sse_disconnected' : 'http_aborted', requestId, httpMethod: req.method,
+      rpcMethod: methodName, toolName, session: hashedSession,
+      statusCode: null, responseFinished: false, durationMs: Date.now() - began, requestBytes, responseBytes });
+  });
 
   if (!authorized(req)) {
     sendJson(res, 401, { error: "unauthorized" }, { "www-authenticate": "Bearer" });
@@ -220,7 +233,7 @@ async function handleMcp(req, res) {
     let session = sessionId ? sessions.get(sessionId) : undefined;
     if (sessionId && !session) {
       runtimeCounters.unknownSessionRequests += 1;
-      sendJson(res, 404, { error: "unknown MCP session" });
+      unknownSession(res);
       return;
     }
     let reservation;
@@ -282,7 +295,7 @@ async function handleMcp(req, res) {
   if (req.method === "GET" || req.method === "DELETE") {
     if (!sessionId || !sessions.has(sessionId)) {
       runtimeCounters.unknownSessionRequests += 1;
-      sendJson(res, 404, { error: "unknown MCP session" });
+      unknownSession(res);
       return;
     }
     const session = sessions.get(sessionId);

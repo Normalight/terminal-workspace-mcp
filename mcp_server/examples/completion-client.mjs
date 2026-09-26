@@ -1,63 +1,69 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { LoggingMessageNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, realpath } from 'node:fs/promises';
+import path from 'node:path';
+import { ReconnectingTerminalClient } from '../client/reconnecting-client.mjs';
+import { atomicJson } from '../src/runtime.mjs';
 import { loadConfig } from '../src/config.mjs';
 
-const commands = process.argv.slice(2);
-if (!commands.length) throw Error('Usage: node mcp_server/examples/completion-client.mjs <shell-command> [next-command ...]');
-const deployment = loadConfig();
-const url = process.env.MCP_NOTIFICATION_URL ?? `${deployment.healthOrigin}${deployment.config.http.path}`;
-const client = new Client({ name: 'completion-example', version: '1' });
-const received = new Map();
-let wake;
-client.setNotificationHandler(LoggingMessageNotificationSchema, ({ params }) => {
-  if (params.logger !== 'terminal-workspace.completion' || params.data?.event !== 'command_completed') return;
-  received.set(params.data.commandId, params.data);
-  wake?.();
-});
-const transport = new StreamableHTTPClientTransport(new URL(url), {
+const deployment = loadConfig(), argv = process.argv.slice(2), resume = argv[0] === '--resume';
+if ((!resume && !argv.length) || (resume && argv.length !== 2)) throw Error('Usage: completion-client.mjs <shell-command> [next-command ...] | --resume <state-file>');
+const workspace = await realpath(deployment.config.workspaceRoot);
+const stateFile = path.resolve(resume ? argv[1] : path.join(workspace, 'outputs/mcp-client-state', `${randomUUID()}.json`));
+const within = p => p === workspace || p.startsWith(workspace + path.sep);
+if (!within(stateFile)) throw Error('State file must be inside the configured workspace');
+// Check existing ancestors before creating directories, including symlinks.
+let ancestor = path.dirname(stateFile);
+for (;;) {
+  try { if (!within(await realpath(ancestor))) throw Error('State directory resolves outside workspace'); break; }
+  catch (error) { if (error.code !== 'ENOENT') throw error; ancestor = path.dirname(ancestor); }
+}
+await mkdir(path.dirname(stateFile), { recursive: true });
+const client = new ReconnectingTerminalClient({
+  url: process.env.MCP_NOTIFICATION_URL ?? `${deployment.healthOrigin}${deployment.config.http.path}`,
   requestInit: { headers: { Authorization: `Bearer ${deployment.env.MCP_AUTH_TOKEN}` } },
+  onReconnect: ({ generation }) => console.error(JSON.stringify({ reconnected: true, generation })),
 });
-async function call(args) {
-  const response = await client.callTool({ name: 'execute_command', arguments: args });
-  if (response.isError) throw Error(JSON.stringify(response.content));
-  return response.structuredContent;
+let state = resume ? JSON.parse(await readFile(stateFile, 'utf8')) : { terminalKey: `example/${randomUUID()}`, phase: 'new' };
+const save = () => atomicJson(stateFile, state);
+const writeOutput = text => new Promise((resolve, reject) => process.stdout.write(text, error => error ? reject(error) : resolve()));
+async function consume(page) {
+  await writeOutput(page.stdout);
+  state = { ...state, sessionId: page.sessionId, commandId: page.commandId, cursor: page.nextCursor, phase: 'monitoring' };
+  await save(); // A crash before this checkpoint may repeat a page, never a command.
 }
-let timer;
-try {
-  await client.connect(transport);
-  await client.setLoggingLevel('notice');
-  let sessionId;
-  // All commands, their event subscriptions and output reads share one Client,
-  // one MCP session/SSE stream, and one persistent terminal.
-  for (const command of commands) {
-    const initial = await call({ command, sessionId, cwd: deployment.config.workspaceRoot, waitMs: 0, notifyOnCompletion: true });
-    sessionId = initial.sessionId;
-    const { commandId } = initial;
-    console.error(JSON.stringify({ sessionId, commandId, nextCursor: initial.nextCursor, completionNotification: initial.completionNotification }));
-    if (!initial.completionNotification?.subscribed) throw Error('Completion subscription unavailable; resume using the saved IDs.');
-    process.stdout.write(initial.stdout);
-    // The handler is installed before tools/call: fast completions cannot race
-    // ahead of listener registration. Waiting here sends no status/tool requests.
-    const completed = await new Promise((resolve, reject) => {
-      wake = () => { if (received.has(commandId)) resolve(received.get(commandId)); };
-      timer = setTimeout(() => reject(Error('No completion event within 30 minutes; reconnect and re-subscribe using saved IDs.')), 30 * 60 * 1000);
-      wake();
-    });
-    clearTimeout(timer);
-    console.error(JSON.stringify(completed));
-    let cursor = initial.nextCursor;
-    for (;;) {
-      const page = await call({ sessionId, commandId, cursor, waitMs: 0 });
-      process.stdout.write(page.stdout); cursor = page.nextCursor;
-      if (!page.outputTruncated) break;
-    }
-    received.delete(commandId); wake = undefined;
-    if (completed.exitCode !== 0) process.exitCode = 1;
+async function finish() {
+  const target = { sessionId: state.sessionId, commandId: state.commandId, cursor: state.cursor };
+  const final = await client.waitForCompletion(target);
+  console.error(JSON.stringify({ commandId: state.commandId, status: final.status, exitCode: final.exitCode }));
+  for (;;) {
+    const page = await client.read({ ...target, cursor: state.cursor, waitMs: 0 });
+    await consume(page);
+    if (!page.outputTruncated) break;
   }
-} finally {
-  clearTimeout(timer);
-  // Terminate the MCP connection; the terminal and its logs are retained.
-  await transport.terminateSession().catch(() => {});
-  await client.close();
+  state.phase = 'complete'; await save();
+  if (final.exitCode !== 0) process.exitCode = 1;
 }
+try {
+  console.error(JSON.stringify({ stateFile, resume }));
+  if (resume) {
+    // This branch submits no commands, even if the initial submission reply was
+    // lost. A unique key locates that workflow's shell; missing state fails closed.
+    const selector = state.sessionId ? { sessionId: state.sessionId } : { terminalKey: state.terminalKey };
+    let page = await client.read({ ...selector, commandId: state.commandId, cursor: state.cursor, waitMs: 0, notifyOnCompletion: true });
+    if (!page.commandId) throw Error('No tracked command is confirmed; inspect the saved task before considering a new submission.');
+    if (state.phase === 'submitting') {
+      if (page.commandId === state.previousCommandId) throw Error('Only the previous command is confirmed; inspect the pending submission without replaying it.');
+      page = await client.read({ sessionId: page.sessionId, commandId: page.commandId, cursor: page.startCursor, waitMs: 0, notifyOnCompletion: true });
+    }
+    await consume(page); await finish();
+  } else {
+    for (const command of argv) {
+      // Commit the selector before sending. No command text or token is stored.
+      const sessionId = state.sessionId;
+      state = { terminalKey: state.terminalKey, ...(sessionId ? { sessionId } : {}), previousCommandId: state.commandId, phase: 'submitting' }; await save();
+      const page = await client.execute({ ...(sessionId ? { sessionId } : { terminalKey: state.terminalKey }),
+        command, cwd: workspace, waitMs: 0, notifyOnCompletion: true });
+      await consume(page); await finish();
+    }
+  }
+} finally { await client.close(); }

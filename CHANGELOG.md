@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add bounded client reconnect, shared initialization, durable completion reconciliation and private resumable checkpoints; never replay uncertain command submissions.
+- Return session recovery guidance on HTTP 404 and audit responses interrupted before completion.
+
 - Reuse tmux shells across MCP connections/restarts by durable task keys; preserve lookup-only history, report closed-shell replacement, and reject commands while an interactive shell is busy.
 - Serialize terminal creation across processes and count live tmux sessions without scanning archived command histories.
 
