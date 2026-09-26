@@ -1,9 +1,11 @@
 import net from "node:net";
 import process from "node:process";
 
+import { serviceLogging } from "./service-logging.mjs";
 import { loadConfig } from "./config.mjs";
 
-const { config } = loadConfig();
+const { config } = loadConfig(process.env.MCP_ISOLATED_SERVICE === '1' ? { env: { MCP_CONFIG_FILE: process.env.MCP_CONFIG_FILE } } : undefined);
+const finishLogging = serviceLogging('relay', config.paths.service);
 const { host: listenHost, port: listenPort, targetHost, targetPort } = config.relay;
 
 const relay = net.createServer((client) => {
@@ -30,7 +32,7 @@ relay.listen(listenPort, listenHost, () => {
 });
 
 function shutdown() {
-  relay.close(() => process.exit(0));
+  relay.close(async () => { await finishLogging(); process.exit(0); });
 }
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

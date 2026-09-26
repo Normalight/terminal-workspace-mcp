@@ -49,12 +49,12 @@ ChatGPT connects to the running service through a tunnel or reachable HTTPS endp
 
 ## Use the two tools
 
-Prefer absolute paths on every call. Use an absolute `cwd` for new sessions; on reused sessions, use absolute operands or explicitly change directory. For long tasks, start once and listen for the completion notification on the calling MCP connection; fetch remaining output using saved IDs/cursors. Clients without notification handling can poll with `sessionId`/`nextCursor` and a 10–30 second wait. See [completion notifications and recovery](mcp_server/README.md#long-tasks). Check the final status and exit code before reporting completion.
+Prefer absolute paths on every call. Use an absolute `cwd` for new sessions; on reused sessions, use absolute operands or explicitly change directory. For long tasks, start once and listen for the completion notification on the calling MCP connection; fetch remaining output using saved IDs/cursors. Clients without notification handling can poll with `sessionId`/`commandId`/`nextCursor` and a 10–30 second wait. See [completion notifications and recovery](mcp_server/README.md#long-tasks). Check the final status and exit code before reporting completion.
 
-Start a terminal:
+Choose a stable task key before the first submission:
 
 ```json
-{"command":"pwd; export DEMO=hello","waitMs":1000}
+{"terminalKey":"project/agent/task","command":"pwd; export DEMO=hello","waitMs":1000}
 ```
 
 Reuse the returned `sessionId`:
@@ -63,13 +63,13 @@ Reuse the returned `sessionId`:
 {"sessionId":"term_<returned-uuid>","command":"printf '%s\n' \"$DEMO\"","waitMs":1000}
 ```
 
-Poll a running command with `{ "sessionId": "...", "cursor": 1234 }`, using the previous `nextCursor`. Answer a prompt with `{ "sessionId": "...", "input": "yes\n" }`, or interrupt with `{ "sessionId": "...", "key": "C-c" }`.
+Poll a running command with `{ "sessionId": "...", "commandId": "...", "cursor": 1234 }`, using the previous `nextCursor`. Answer a prompt with `{ "sessionId": "...", "input": "yes\n" }`, or interrupt with `{ "sessionId": "...", "key": "C-c" }`.
 
 For reuse across fresh MCP connections, set a stable `terminalKey` such as `project/build-42` on the first and subsequent calls instead of `sessionId`. Reads never create a shell. New commands can replace a closed keyed shell, reporting `terminalReused:false` and `replacedSessionId`; initialize its directory/environment again. Use distinct keys for independent tasks and retain original IDs/cursors for history. See [terminal reuse and interaction](mcp_server/README.md#execute-and-interact).
 
-`waitMs` and `maxBytes` limit the response; they do not kill a process. Terminal output merges stdout/stderr and may contain ANSI sequences. Use shell commands for editing, search, Git, and process management.
+`waitMs` and `maxBytes` limit the response; they do not kill a process. Default output is bounded to the selected command; omitted cursors read from its beginning. Explicit `outputScope:"terminal"` reads shared PTY history (tail by default). Check `outputGap` and `outputComplete` in addition to exit status. PTY output merges stdout/stderr and may contain ANSI and concurrent background output; use dedicated files for strict process output. Use shell commands for editing, search, Git, and process management.
 
-Fetch a file with `get_file({"path":"result.png"})`. For larger files, start at `offset:0` and continue with `nextOffset` until `eof`. Files retain their original bytes; HTTP compression is decoded by the client.
+Fetch a file with `get_file({"path":"result.png"})`. For larger files, start at `offset:0` and continue with `nextOffset` and `expectedVersion` from the first response's `version` until `eof`. Files retain their original bytes; HTTP compression is decoded by the client.
 
 ## Configuration and service management
 
@@ -78,13 +78,14 @@ Edit [`mcp_server/config.json`](mcp_server/config.json), or place machine-specif
 ```bash
 node mcp_server/scripts/config.mjs show
 node mcp_server/scripts/config.mjs sync-plugin
-python3 -B mcp_server/scripts/service.py start
-python3 -B mcp_server/scripts/service.py status
-python3 -B mcp_server/scripts/service.py restart
-python3 -B mcp_server/scripts/service.py stop
+python3 -B mcp_server/scripts/services.py prepare
+# Review generated units and any filesystem-policy exception first.
+python3 -B mcp_server/scripts/services.py install
+python3 -B mcp_server/scripts/services.py start --component all
+python3 -B mcp_server/scripts/services.py status --component all
 ```
 
-Use `--component relay` for the optional TCP relay. The helper manages detached processes; use your host's service manager for boot startup and automatic restart. Stopping the MCP process leaves tmux sessions running. See the [operator guide](mcp_server/README.md) for session cleanup, retention, file limits, compression, configuration precedence, and compatibility mode.
+MCP, tmux, relay and an optional tunnel run as independent systemd user services, with no botmux runtime dependency. See [service deployment and migration](mcp_server/SERVICES.md) for linger, private configuration and adoption of existing tasks. MCP restart preserves tmux tasks. Multiple agents can call concurrently using distinct terminal keys and independent read cursors; clients share service-account permissions. See the [operator guide](mcp_server/README.md) for session cleanup, retention, file limits, compression, configuration precedence, and compatibility mode.
 
 ## Session cleanup
 

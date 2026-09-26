@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from 'node:timers/promises';
+import { abortable, combineSignals, recoveringFetch, requestContext } from './request-policy.mjs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { LoggingMessageNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -39,21 +40,7 @@ export class ReconnectingTerminalClient {
     }
     Object.assign(this, { maxRetries, baseDelayMs, maxDelayMs, requestTimeoutMs, reconcileMs, onReconnect });
     this.lifecycle = new AbortController(); this.events = new Set(); this.waiters = new Set(); this.generation = 0;
-    this.fetch = async (url, options = {}) => {
-      // GET's body is an ongoing SSE stream. Apply deadlines only to finite RPCs.
-      const signal = options.method === 'GET' ? options.signal : AbortSignal.any([
-        ...(options.signal ? [options.signal] : []), AbortSignal.timeout(options.method === 'DELETE' ? 2000 : requestTimeoutMs),
-      ]);
-      const response = await fetcher(url, { ...options, signal });
-      if ([429, 503].includes(response.status)) {
-        const retry = response.headers.get('retry-after');
-        const retryAfterMs = retry === null ? 0 : /^\d+(\.\d+)?$/.test(retry) ? Number(retry) * 1000 : Math.max(0, Date.parse(retry) - Date.now());
-        await response.body?.cancel();
-        const error = new Error(`HTTP ${response.status}`); error.code = response.status;
-        error.retryAfterMs = Number.isFinite(retryAfterMs) ? retryAfterMs : 0; throw error;
-      }
-      return response;
-    };
+    this.fetch = recoveringFetch(fetcher, { lifecycle: this.lifecycle, requestTimeoutMs, url: this.url });
   }
 
   wake() { for (const fn of this.waiters) fn(); }
@@ -73,7 +60,7 @@ export class ReconnectingTerminalClient {
         client.onerror = () => { if (!connection.retired) this.wake(); };
         client.onclose = () => { if (!connection.retired) this.wake(); };
         client.setNotificationHandler(LoggingMessageNotificationSchema, ({ params }) => {
-          if (connection.retired || params.logger !== 'terminal-workspace.completion' || params.data?.event !== 'command_completed') return;
+          if (connection.retired || params.logger !== 'terminal-workspace.completion' || !['command_completed', 'command_attention_required'].includes(params.data?.event)) return;
           this.events.add(`${params.data.sessionId}:${params.data.commandId}`);
           if (this.events.size > 1024) this.events.delete(this.events.values().next().value);
           this.wake();
@@ -95,12 +82,12 @@ export class ReconnectingTerminalClient {
     finally { if (this.connecting === pending) this.connecting = null; }
   }
 
-  async recover(operation) {
+  async recover(operation, { signal = this.lifecycle.signal, retryIf = retryable } = {}) {
     for (let attempt = 0; ; attempt++) {
       let connection;
-      try { connection = await this.connectionForCall(); return await operation(connection); }
+      try { signal.throwIfAborted(); connection = await abortable(this.connectionForCall(), signal); return await operation(connection); }
       catch (error) {
-        if (this.lifecycle.signal.aborted || !retryable(error) || attempt >= this.maxRetries) throw error;
+        if (signal.aborted || !(connection ? retryIf(error) : retryable(error)) || attempt >= this.maxRetries) throw error;
         // Retire only the failed generation. Concurrent readers share the next
         // initialization instead of creating one new session per retry.
         if (connection && this.connection === connection) {
@@ -108,39 +95,45 @@ export class ReconnectingTerminalClient {
         }
         const delayMs = retryDelay(error, attempt, this);
         if (delayMs > this.requestTimeoutMs) throw error; // Do not ignore a long Retry-After.
-        await sleep(delayMs, undefined, { signal: this.lifecycle.signal });
+        await sleep(delayMs, undefined, { signal });
       }
     }
   }
 
   async connect() { await this.recover(async () => {}); }
-  async call(connection, args) {
-    const response = await connection.client.callTool({ name: 'execute_command', arguments: args }, undefined, { timeout: this.requestTimeoutMs });
+  async call(connection, args, { signal = this.lifecycle.signal } = {}) {
+    const response = await requestContext.run({ signal }, () => connection.client.callTool({ name: 'execute_command', arguments: args }, undefined, { timeout: this.requestTimeoutMs, signal }));
     if (response.isError) {
       const error = new Error(response.content?.filter(x => x.type === 'text').map(x => x.text).join('\n') || 'Tool failed');
-      error.code = 'tool_error'; throw error;
+      error.code = 'tool_error';
+      try { const detail = JSON.parse(error.message); error.serverCode = detail.code; error.recovery = detail.recovery; } catch {}
+      throw error;
     }
     return response.structuredContent;
   }
-  async read(args) {
+  async read(args, options = {}) {
     if (args.command !== undefined || args.input !== undefined || args.key !== undefined) throw TypeError('read retries only status/output requests, without command/input/key');
-    return this.recover(connection => this.call(connection, args));
+    return this.recover(connection => this.call(connection, args, options), options);
   }
   async execute(args) {
     if (!args.command?.trim() || (!args.sessionId && !args.terminalKey)) throw TypeError('execute needs command and a saved sessionId or stable terminalKey');
-    const connection = await this.recover(async connection => connection);
-    try { return await this.call(connection, args); }
-    catch (error) {
-      // Retrying a write after a missing reply can start the same training twice.
-      if (retryable(error)) throw new SubmissionUncertainError(args, error);
-      throw error;
-    }
+    return this.recover(async connection => {
+      try { return await this.call(connection, args); }
+      catch (error) {
+        if (error.sessionExpired) throw error;
+        if (retryable(error)) throw new SubmissionUncertainError(args, error);
+        throw error;
+      }
+    }, { retryIf: error => error.sessionExpired === true });
   }
+
   async waitForCompletion(args, { timeoutMs = 30 * 60 * 1000 } = {}) {
     if (!args.sessionId || !args.commandId) throw TypeError('completion recovery requires saved sessionId and commandId');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw TypeError('invalid timeoutMs');
     const key = `${args.sessionId}:${args.commandId}`, deadline = Date.now() + timeoutMs;
+    const signal = combineSignals(this.lifecycle.signal, AbortSignal.timeout(timeoutMs));
     for (;;) {
-      const state = await this.read({ ...args, waitMs: 0, notifyOnCompletion: true });
+      const state = await this.read({ ...args, waitMs: 0, notifyOnCompletion: true }, { signal });
       if (state.status !== 'running' && state.status !== 'starting') { this.events.delete(key); return state; }
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw Error('Completion wait expired; retain IDs/cursor and resume without command.');
@@ -150,7 +143,7 @@ export class ReconnectingTerminalClient {
         let timer;
         const done = () => { clearTimeout(timer); this.waiters.delete(done); resolve(); };
         this.waiters.add(done); timer = setTimeout(done, Math.min(this.reconcileMs, remaining));
-        if (this.events.has(key) || this.lifecycle.signal.aborted) done();
+        if (this.events.has(key) || signal.aborted) done();
       });
     }
   }

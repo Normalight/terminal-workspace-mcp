@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { executeTerminalCall, terminalDescription } from "./terminal-tool.mjs";
 import { OperationError, quote } from "./runtime.mjs";
 
 const readOnly = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
@@ -16,7 +17,7 @@ export function result(value, summary) {
 }
 export function errorResult(error) {
   const code = typeof error?.code === "string" ? error.code : "operation_failed";
-  return { isError: true, content: [{ type: "text", text: JSON.stringify({ code, message: error?.message ?? String(error) }) }] };
+  return { isError: true, content: [{ type: "text", text: JSON.stringify({ code, message: error?.message ?? String(error), ...(error?.recovery ? { recovery: error.recovery } : {}) }) }] };
 }
 function readonlyCommand(command) {
   const parts = command.split(/\s+&&\s+/);
@@ -54,19 +55,19 @@ export function registerTools(server, { workspace: w, executor, jobs, terminals:
   register("file_info", "Get file size and modification time; optionally stream a full-file SHA256 checksum.", { path: string, checksum: z.boolean().default(false) }, a => w.fileInfo(a.path, a));
   register("read_file_chunk", "Download a bounded binary (base64) or UTF-8 chunk. Resume using nextOffset; includes a checksum of the returned byte range.", { path: string, offset: z.number().int().min(0).default(0), maxBytes, encoding: z.enum(["base64", "utf8"]).default("base64"), tail: z.boolean().default(false) }, a => w.readChunk(a.path, a));
   register("write_file_chunk", "Upload original bytes as base64. Create/overwrite at offset 0; append with offset equal to current file size. Optional chunk SHA256 and expectedSize detect transfer errors and conflicts.", { path: string, data: string.max(1398104), offset: z.number().int().min(0).default(0), mode: z.enum(["create", "append", "overwrite"]).default("append"), expectedSize: z.number().int().min(0).optional(), sha256: string.regex(/^[a-f0-9]{64}$/).optional() }, a => w.writeChunk(a.path, a), modifying);
-  define("get_file", { title: "Get original file", description: "Fetch an original accessible file. Prefer an absolute path on every call; ~/ and default-directory relative paths also work. Small images render directly. For large files provide offset=0 and continue using nextOffset; chunks include SHA256 and totalBytes.", inputSchema: { path: string, offset: z.number().int().min(0).optional(), maxBytes: z.number().int().min(4).max(1048576).optional() }, outputSchema: object, annotations: readOnly }, async a => {
+  define("get_file", { title: "Get original file", description: "Fetch an original accessible file. Prefer an absolute path on every call; ~/ and default-directory relative paths also work. Small images render directly. For large files provide offset=0 and continue using nextOffset; chunks include SHA256, totalBytes and version. Send expectedVersion from the first response on subsequent chunks; file_changed means restart the transfer on a stable artifact.", inputSchema: { expectedVersion: string.regex(/^[a-f0-9]{64}$/).optional(), path: string, offset: z.number().int().min(0).optional(), maxBytes: z.number().int().min(4).max(1048576).optional() }, outputSchema: object, annotations: readOnly }, async a => {
     try {
       let file;
       if (a.offset !== undefined) {
-        const chunk = await w.readChunk(a.path, { offset: a.offset, maxBytes: Math.min(a.maxBytes ?? config.directFileMaxBytes, config.directFileMaxBytes, 1048576), encoding: "base64" });
+        const chunk = await w.readChunk(a.path, { offset: a.offset, maxBytes: Math.min(a.maxBytes ?? config.directFileMaxBytes, config.directFileMaxBytes, 1048576), encoding: "base64", expectedVersion: a.expectedVersion });
         file = { ...chunk, data: Buffer.from(chunk.data, "base64") };
       } else {
-        try { file = await w.readFileBytes(a.path, { maxBytes: Math.min(a.maxBytes ?? config.directFileMaxBytes, config.directFileMaxBytes) }); }
+        try { file = await w.readFileBytes(a.path, { maxBytes: Math.min(a.maxBytes ?? config.directFileMaxBytes, config.directFileMaxBytes), expectedVersion: a.expectedVersion }); }
         catch (error) { if (error.code === "file_too_large") throw new OperationError("file exceeds this response budget; set offset=0 and continue with nextOffset", "file_too_large"); throw error; }
       }
       const ext = file.path.toLowerCase().split(".").at(-1);
       const mimeType = ({ png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif", pdf: "application/pdf", svg: "image/svg+xml", txt: "text/plain", json: "application/json" })[ext] ?? "application/octet-stream";
-      const metadata = { path: file.path, bytes: file.bytes, sha256: file.sha256, ...(a.offset === undefined ? { sha256Scope: "file" } : { offset: file.offset, nextOffset: file.nextOffset, totalBytes: file.totalBytes, eof: file.eof, sha256Scope: "chunk" }), mimeType, uri: `workspace:///${file.path.split("/").map(encodeURIComponent).join("/")}` };
+      const metadata = { version: file.version, path: file.path, bytes: file.bytes, sha256: file.sha256, ...(a.offset === undefined ? { sha256Scope: "file" } : { offset: file.offset, nextOffset: file.nextOffset, totalBytes: file.totalBytes, eof: file.eof, sha256Scope: "chunk" }), mimeType, uri: `workspace:///${file.path.split("/").map(encodeURIComponent).join("/")}` };
       const blob = file.data.toString("base64");
       return { ...result(metadata), content: [{ type: "text", text: `Fetched ${file.path} (${file.bytes} bytes)` }, mimeType.startsWith("image/") && ext !== "svg" && (a.offset === undefined || (file.offset === 0 && file.eof)) ? { type: "image", data: blob, mimeType } : { type: "resource", resource: { uri: metadata.uri, mimeType, blob } }] };
     } catch (error) { return errorResult(error); }
@@ -107,34 +108,13 @@ export function registerTools(server, { workspace: w, executor, jobs, terminals:
   server.registerTool("get_file", getFile.spec, getFile.callback);
   server.registerTool("execute_command", {
     title: "Execute in persistent terminal",
-    description: "Run shell commands in persistent tmux. Start once; save and reuse terminal sessionId, commandId and nextCursor. Alternatively choose terminalKey=project/task to find the same tmux across MCP reconnects. Different tasks use distinct keys. Existing keys preserve cwd/env; cwd applies only on creation. A closed key is replaced only when submitting a new command, with replacedSessionId reported; reads never create a shell. Busy keys keep the same shell and reject a second command. Poll tracked work without command; use waitMs instead of new sleep/inspection shells. Commands returned as running automatically subscribe this MCP connection to notifications/message (logger=terminal-workspace.completion, level=notice, data.event=command_completed). completionNotification.listening reports a listener at response time; if false, attach GET SSE or poll. Client transports should reuse MCP-Session-Id and one SSE stream across calls; it is distinct from terminal sessionId. Keep HTTP GET SSE or stdio listening; the event carries IDs, status, exitCode and outputEndCursor. Then read with sessionId, commandId and cursor=previous nextCursor, no command, until output is drained. notifyOnCompletion=false disables the subscription; true re-subscribes after reconnect, including already finished commands. Notifications do not wake an offline client or guarantee model continuation. If your client cannot consume events, poll with sessionId/cursor, waitMs=10000..30000. waitMs/maxBytes limit this response only; expiry never means the command stopped and is never a reason to rerun it. cwd only initializes new sessions; use absolute paths or cd for reused sessions. Use input for prompts, key=C-c to interrupt; PTY output merges stdout/stderr and may contain ANSI. Use shell for files/search/Git; get_file fetches artifacts. Inspect/clean owned sessions with node \"$MCP_TERMINAL_ADMIN\" list or cleanup --apply (logs retained); running tasks are protected. command=exit closes an idle shell after checking background jobs.",
-    inputSchema: { command: string.max(20000).optional(), sessionId: sessionId.optional(), terminalKey, commandId: commandId.optional().describe("Read/subscribe to a specific saved command; requires sessionId or terminalKey and no command/input/key."), notifyOnCompletion, cwd: string.optional(), input: string.max(65536).optional(), key: z.enum(["C-c", "C-d", "C-z", "Enter", "Escape", "Tab"]).optional(), cursor: z.number().int().min(0).optional(), waitMs: z.number().int().min(0).max(30000).default(1000), maxBytes },
+    description: terminalDescription,
+    inputSchema: { outputScope: z.enum(["command", "terminal"]).optional().describe("Command byte range by default for tracked work; terminal selects shared PTY history."), command: string.max(20000).optional(), sessionId: sessionId.optional(), terminalKey, commandId: commandId.optional().describe("Read/subscribe to a specific saved command; requires sessionId or terminalKey and no command/input/key."), notifyOnCompletion, cwd: string.optional(), input: string.max(65536).optional(), key: z.enum(["C-c", "C-d", "C-z", "Enter", "Escape", "Tab"]).optional(), cursor: z.number().int().min(0).optional(), waitMs: z.number().int().min(0).max(30000).default(1000), maxBytes },
     outputSchema: object, annotations: modifying,
   }, async (a) => {
     try {
       if (!config.enableTerminal) throw new OperationError("set MCP_ENABLE_TERMINAL=1 to enable execution", "terminal_disabled");
-      const began = Date.now();
-      if (a.sessionId && a.terminalKey !== undefined) throw new OperationError("provide sessionId or terminalKey, not both", "invalid_input");
-      if (a.commandId && ((!a.sessionId && !a.terminalKey) || a.command !== undefined || a.input !== undefined || a.key)) throw new OperationError("commandId requires sessionId or terminalKey and a read/subscribe call without command/input/key", "invalid_input");
-      if (a.command !== undefined && (a.input !== undefined || a.key)) throw new OperationError("send a command or interactive input in separate calls", "invalid_input");
-      if (!a.sessionId && !a.terminalKey && (!a.command?.trim())) throw new OperationError("provide command for a new session, or sessionId/terminalKey to resume", "invalid_input");
-      const opened = a.sessionId ? null : await t.open({ terminalKey: a.terminalKey, createIfMissing: !!a.command?.trim(), resolveCwd: async () => (await cwd(a.cwd)).absolute });
-      const id = a.sessionId ?? opened.sessionId;
-      let tracked, page;
-      if (a.command?.trim()) {
-        const execution = await t.execute(id, { command: a.command, waitMs: a.waitMs, maxBytes: a.maxBytes });
-        const { output, ...state } = execution; tracked = state; page = output;
-      } else {
-        if (a.input !== undefined || a.key) await t.write(id, { input: a.input ?? "", key: a.key });
-        page = await t.read(id, { cursor: a.cursor, maxBytes: a.maxBytes, waitMs: a.waitMs });
-        const state = await t.status(id);
-        tracked = (a.commandId ?? state.activeCommandId) ? await t.commandStatus(id, a.commandId ?? state.activeCommandId) : { status: state.alive ? "idle" : "terminal_closed", exitCode: null };
-        // Completion can arrive while read() is returning an earlier snapshot.
-        // Refresh from that same cursor after the logger acknowledges completion.
-        if (tracked.status !== 'running') page = await t.read(id, { cursor: page.cursor, maxBytes: a.maxBytes });
-      }
-      const state = await t.status(id);
-      const value = { ...tracked, sessionId: id, ...(state.terminalKey ? { terminalKey: state.terminalKey } : {}), terminalReused: opened?.reused ?? true, ...(opened?.replacedSessionId ? { replacedSessionId: opened.replacedSessionId } : {}), cwd: state.cwd, stdout: page.content, stderr: "", nextCursor: page.nextCursor, endCursor: page.endCursor, earliestCursor: page.earliestCursor, droppedBytes: page.droppedBytes, outputTruncated: page.truncated, waitingExpired: tracked.status === "running", durationMs: Date.now() - began };
+      const value = await executeTerminalCall(t, a, async value => (await cwd(value)).absolute);
       return result(completions ? completions.observe(value, a.notifyOnCompletion, !!a.command?.trim()) : value);
     } catch (error) { return errorResult(error); }
   });

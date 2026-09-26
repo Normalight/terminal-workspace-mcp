@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { readFile, unlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { TerminalManager } from '../src/terminal-manager.mjs';
 import { TerminalAdmin } from '../src/terminal-admin.mjs';
-import { atomicJson, delay } from '../src/runtime.mjs';
+import { atomicJson, delay, quote } from '../src/runtime.mjs';
 import { fixture } from './helpers.mjs';
 
 test('interactive and directly typed builtins are protected until the prompt returns', { timeout: 15000 }, async () => {
@@ -58,6 +58,14 @@ test('terminal ownership, legacy recognition, previews and idle cleanup protect 
     await t.execute(background,{command:'sleep 30 &',waitMs:500});
     await t.run(['set-option','-t',kept,'@mcp_keep','1']);
     await t.run(['split-window','-d','-t',split,'sleep 30']);
+    // Reproduce the old launch signature, not just missing metadata on a new
+    // isolated launcher. Ownership recognition must stay strict in production.
+    const gate = `legacy_${randomUUID()}`, legacyReady = path.join(t.dir(legacy), 'ready');
+    await unlink(legacyReady).catch(() => {});
+    await t.run(['respawn-pane', '-k', '-t', `${legacy}:0.0`, '-c', f.root,
+      `${quote(t.tmux)} -S ${quote(t.socket)} wait-for ${quote(gate)}; exec /bin/bash --noprofile --rcfile ${quote(path.join(t.dir(legacy), 'shell.rc'))} -i`]);
+    await t.run(['wait-for', '-S', gate]);
+    for (let i = 0; i < 100; i++) { if (await readFile(legacyReady, 'utf8').catch(() => '') === 'ready') break; await delay(20); }
     const legacyMeta=JSON.parse(await readFile(path.join(t.dir(legacy),'meta.json'),'utf8'));
     delete legacyMeta.owner;delete legacyMeta.managerId;delete legacyMeta.tmuxSessionId;
     await atomicJson(path.join(t.dir(legacy),'meta.json'),legacyMeta);

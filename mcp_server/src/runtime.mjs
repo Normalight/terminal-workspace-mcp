@@ -57,6 +57,7 @@ export function childEnvironment(storageRoot, extra = {}) {
     HF_HOME: path.join(base, ".cache/huggingface"), TORCH_HOME: path.join(base, ".cache/torch"),
     CONDA_ENVS_PATH: path.join(base, "shared/envs"), CONDA_PKGS_DIRS: path.join(base, ".cache/conda/pkgs"),
   };
+  for (const key of Object.keys(env)) if (key.startsWith('BOTMUX_')) delete env[key];
   delete env.MCP_AUTH_TOKEN; delete env.CONTROL_PLANE_API_KEY; delete env.MCP_RUNTIME_AUTH;
   return env;
 }

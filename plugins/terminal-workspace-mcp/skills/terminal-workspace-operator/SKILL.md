@@ -1,25 +1,48 @@
 ---
 name: terminal-workspace-operator
-description: Operate the connected machine using shell commands in persistent tmux sessions and retrieve original files through MCP. Use for remote work on the connected server.
+description: Operate a connected Terminal Workspace MCP server using persistent terminal tasks, reconnect or resume saved commands, inspect command output, and retrieve original files. Use for remote shell work on that connected machine.
 ---
 
 # Terminal Workspace Operator
 
-Use `execute_command` for operations and `get_file` to retrieve artifacts. Paths may be absolute, `~/`, or relative to the configured default workspace; account permissions apply. Output retains its original content. Follow the user's task authorization and filesystem constraints.
+Use `execute_command` for shell operations and `get_file` for artifacts. Follow the user's authorization and filesystem constraints; the server runs with its service account's permissions. Prefer absolute paths and set an absolute `cwd` when creating a shell.
 
-Prefer absolute paths on every call. Set an absolute `cwd` for a new session; on reused sessions use absolute operands or an explicit `cd -- /absolute/path`. Do not depend on a previous shell's directory or environment after idle reclamation.
+## Submit once and recover
 
-- Start with `execute_command({command,cwd,waitMs:1000})`. Keep the returned `sessionId` and reuse it to preserve directory, environment, and shell state. `cwd` applies only to new sessions; use `cd` in existing shells.
-- For reconnecting callers, choose a stable `terminalKey` per task at creation, e.g. `{terminalKey:"project/build-42",command,cwd}`. Subsequent calls use that key or the returned `sessionId`, never both. Keys persist across MCP connections/restarts; distinct tasks need distinct keys. Reads by key never create shells. A busy shell rejects new commands; read or interact with the existing work. Check `terminalReused`: a new command may replace a closed/reclaimed shell and return `replacedSessionId`, losing old cwd/environment. Initialize explicitly after replacement and retain original sessionId/commandId/cursor for old results. Never resend a command merely to restore monitoring.
-- Start a long task once. Commands returned as `running` automatically subscribe the calling MCP connection to `notifications/message` (`logger=terminal-workspace.completion`, `level=notice`, `data.event=command_completed`). If the host handles these events, keep GET SSE/stdio listening; on completion read remaining output with saved `sessionId`, `commandId`, and `cursor:nextCursor`. `notifyOnCompletion:false` opts out. If the host cannot consume notifications, poll with `{sessionId,cursor:nextCursor,waitMs:10000,maxBytes:65536}` and no `command`; increase waits up to 30000ms when output is sparse. Waiting expiry or a connection error is not a reason to launch it again. Check `status` and `exitCode`, then drain remaining output before reporting completion. Consume `structuredContent` for full pages. Output is merged PTY stdout/stderr and can contain ANSI sequences and command echo.
-- Reuse the same terminal `sessionId` for repeated inspections. To wait for a tracked command, send no `command` and use `waitMs`; avoid opening another shell just to run `sleep` and inspect the same task. `completionNotification.listening` reports an actual event listener at response time; a subscription without a listener requires the host to attach SSE or use polling.
-- Transport integrations should initialize once, reuse `Mcp-Session-Id` across HTTP requests and one GET SSE stream for tasks, then DELETE when finished. This HTTP header is separate from the terminal `sessionId` tool argument. Idle protocol sessions may be reclaimed (normally after 2 minutes, earlier under pressure); on HTTP 404 reinitialize and inspect/re-subscribe using saved terminal IDs without launching the task again. Finite POST requests do not require a long-lived response.
-- On a missing execution response, submission is uncertain: inspect the saved task key/IDs first. Never automatically replay command/input/key. Retry only read/subscribe calls for transient transport failures, with bounded backoff and Retry-After. Reconcile persisted task state if completion notifications are absent. Authentication/argument errors and upstream `Unknown tool` require correction, not a retry loop. Integrations may use `mcp_server/client/reconnecting-client.mjs`; the example saves recovery checkpoints and supports `--resume <state-file>`. Hosted connectors must implement their own recovery or refresh their tool registration.
-- Save sessionId, nextCursor, commandId and absolute log/artifact paths for handoff. tmux retains running processes across MCP restarts, but completion delivery needs an active listener and does not itself schedule a model turn. After a new MCP connection/service restart, re-subscribe with `{sessionId,commandId,notifyOnCompletion:true,waitMs:0}` and no `command`, even if already completed. A saved commandId can select an earlier command in the same terminal. Run long work in the foreground; a shell returning after `&` does not establish background-task completion. Start a replacement for a reclaimed idle shell only once the previous command's outcome is known.
-- Answer prompts with `{sessionId,input:"yes\n"}` or interrupt with `{sessionId,key:"C-c"}`. Do not combine `command` with input/key. Each shell accepts one tracked command at a time; independent work may open another.
-- Use ordinary shell commands for files, search, Git, and process management. For structured results, redirect output to a file. Preserve `PROMPT_COMMAND` and internal command-tracking variables used for exit-code tracking.
-- Inspect ownership and window/pane IDs with `node "$MCP_TERMINAL_ADMIN" list`. `cleanup` previews the configured policy; `cleanup --apply` rechecks and reclaims eligible sessions, keeping logs. Defaults: check every 30 seconds, reclaim exited sessions and shells idle for five minutes. Running commands, child processes, attached clients, modified layouts and `@mcp_keep=1` are protected. Check `jobs -pr` before ending an unneeded shell with `command:"exit"`.
-- To retain idle shell state, set SESSION_ID to the returned ID and run `tmux -S "$MCP_TERMINAL_ROOT/tmux.sock" set-option -t "$SESSION_ID" @mcp_keep 1`; unset the option when done. Never use a name prefix alone to infer ownership or kill the default tmux server. Runtime root and admin helper variables are set in new MCP shells; older sessions can use the paths from the deployment configuration and repository.
-- `get_file({path})` returns an original small file/image and whole-file SHA256. Large files use `{path,offset:0,maxBytes:1048576}`, then `offset:nextOffset` until `eof`. Decode and concatenate resource blobs in order; chunk checksums cover only their byte range. Use `sha256sum` for a full-file checksum when needed.
+Choose a stable `terminalKey` such as `project/agent/task` **before the first call**:
 
-The default server advertises two tools. `/healthz` reports deployed version, revision, and tool count. A client with stale tool schemas needs a fresh discovery session. Authentication stays in local configuration.
+```json
+{"terminalKey":"project/agent/task","command":"your command","cwd":"/absolute/project","waitMs":1000}
+```
+
+Save `sessionId`, `commandId`, `nextCursor`, and artifact paths. The key locates a shell; it does not deduplicate command submissions. Different agents/tasks should use distinct keys. A shell accepts one active tracked command; `terminal_busy` requires reading or interacting with its current task.
+
+While `status` is `starting` or `running`, poll without `command`:
+
+```json
+{"sessionId":"term_...","commandId":"cmd_...","cursor":1234,"waitMs":10000,"maxBytes":65536}
+```
+
+Use the previous `nextCursor`, increasing waits up to 30000 ms for sparse output. Read all remaining pages after execution ends. Check `status`, `exitCode`, `outputGap` and `outputComplete` before reporting success and complete output. Consume `structuredContent` for full pages.
+
+A lost reply, expired wait or reconnect is never permission to resubmit. If the first reply is lost, inspect the saved key without `command`. For `submission_uncertain` or `unknown`, inspect the saved command and its side effects; do not automatically replay. `submission_failed` provides a recovery selector and indicates failure before dispatch. HTTP `MCP-Session-Id` is a transport identifier, separate from the terminal's `sessionId`; an expired HTTP session needs fresh initialization, then reads of the saved task.
+
+Running calls subscribe to `notifications/message` with logger `terminal-workspace.completion`. If `completionNotification.listening` is false or the host cannot handle notifications, keep polling. After reconnect, resubscribe with saved IDs and `notifyOnCompletion:true`. Events need a running client and do not start another model turn or wake an offline agent. The provided completion client supports private `--resume` checkpoints and marks incomplete output explicitly.
+
+## Understand output and shell state
+
+The default output scope is the tracked command's byte range. Without `cursor`, reads start at that command's beginning. Always save `commandId` for historical reads; omitting it selects the shell's latest command. `outputScope:"terminal"` explicitly reads the shared PTY stream, with tail semantics when no cursor is given.
+
+PTY output merges stdout/stderr (`stderr` is empty). It may include ANSI, interactive echo and background-process output during that command's time range. Use dedicated output files for exact per-process stdout/stderr. Retention, a failed collector or old receipts without boundaries cause `outputGap:true`; execution success alone does not guarantee complete output.
+
+`cwd` applies only on creation; use `cd -- /absolute/path` in an existing shell. Closed/reclaimed keys can return a replacement shell on a new command; initialize its cwd/environment again. Keep the original `sessionId` to read its old history. tmux tasks survive MCP restarts, but do not survive machine reboot or termination of their tmux server.
+
+Answer prompts using `{sessionId,input:"yes\n"}` or interrupt using `{sessionId,key:"C-c"}`. Send commands and interactive input in separate calls. Preserve `PROMPT_COMMAND`, the `DEBUG` trap and internal tracking variables. Long work should stay in the foreground; a command ending in `&` completes when its shell returns.
+
+## Manage resources and files
+
+- Use shell commands for files, search, Git and processes. Inspect managed ownership/panes with `node "$MCP_TERMINAL_ADMIN" list`. `cleanup` previews policy; `cleanup --apply` rechecks eligible sessions. Running/uncertain commands, child processes, attached clients, modified layouts and `@mcp_keep=1` are protected. Check `jobs -pr` before ending an unneeded shell with `command:"exit"`.
+- To retain idle state, set `SESSION_ID` to the returned ID and run `tmux -S "$MCP_TERMINAL_ROOT/tmux.sock" set-option -t "$SESSION_ID" @mcp_keep 1`; unset when done. Never infer ownership from a name prefix or kill the default tmux server. Older shells may need the configured runtime/helper paths supplied explicitly.
+- `get_file({path})` returns a small original file/image and whole-file SHA256. For large files, start with `{path,offset:0,maxBytes:1048576}`; then use `offset:nextOffset` **and `expectedVersion` set to the first response's `version`**, until `eof`. `file_changed` requires restarting the transfer from a stable artifact. Decode blobs in order; chunk checksums cover only their range. Use a whole-file checksum for final verification.
+
+Multiple MCP clients may call concurrently and read with independent cursors. Keys and HTTP sessions are coordination identifiers, not security boundaries; agents share account permissions. The default server exposes two tools. `/healthz` reports version, revision and tool count. Refresh saved client discovery when schemas are stale. Authentication stays in local configuration.

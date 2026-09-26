@@ -29,23 +29,24 @@ test('poll includes final output when completion arrives after its initial read'
     const initial = await call({ cwd: f.root, command: 'printf FIRST; while [ ! -f release ]; do sleep .01; done; printf LAST' });
     id = initial.sessionId;
     assert.equal(initial.status, 'running');
-    // Force a real command to finish between the log snapshot and status read.
-    const read = t.read.bind(t); let armed = true;
-    t.read = async (...args) => {
-      const page = await read(...args);
+    // Force completion after the first state snapshot; the output helper
+    // must then refresh within the final immutable command boundary.
+    const status = t.commandStatus.bind(t); let armed = true;
+    t.commandStatus = async (...args) => {
+      const snapshot = await status(...args);
       if (armed) {
         armed = false; await writeFile(path.join(f.root, 'release'), '');
         for (let i = 0; i < 100; i++) {
-          if ((await t.commandStatus(initial.sessionId, initial.commandId)).status !== 'running') break;
+          if (!['running', 'starting'].includes((await status(initial.sessionId, initial.commandId)).status)) break;
           await delay(10);
         }
       }
-      return page;
+      return snapshot;
     };
     const final = await call({ sessionId: initial.sessionId, cursor: initial.nextCursor });
     assert.equal(final.status, 'succeeded'); assert.equal(final.outputTruncated, false);
     assert.match(initial.stdout + final.stdout, /FIRSTLAST/);
-    assert(final.nextCursor >= final.outputEndCursor);
+    assert.equal(final.nextCursor, final.outputEndCursor);
     const exited = await call({ sessionId: initial.sessionId, command: 'printf BEFORE_EXIT; exit 3', waitMs: 2000 });
     assert.equal(exited.status, 'terminal_closed'); assert.equal(exited.exitCode, 3);
     assert.match(exited.stdout, /BEFORE_EXIT/);

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { integer, KeyedMutex, OperationError } from "./runtime.mjs";
+import { checkFileVersion } from "./file-version.mjs";
 import { utf8Window } from "./log-store.mjs";
 
 const DEFAULT_MAX_FILE_BYTES = 256 * 1024;
@@ -63,16 +64,17 @@ export class Workspace {
     entries.sort((a,b) => a.path.localeCompare(b.path));
     return { root: start.relative, entries, truncated: truncated || queue.length > 0 };
   }
-  async readFileBytes(value, { maxBytes = DEFAULT_MAX_BINARY_FILE_BYTES } = {}) {
+  async readFileBytes(value, { maxBytes = DEFAULT_MAX_BINARY_FILE_BYTES, expectedVersion } = {}) {
     integer(maxBytes, "maxBytes", 1, HARD_MAX_BINARY_FILE_BYTES);
     const target = await this.resolve(value), fh = await open(target.absolute, "r");
     try {
-      const info = await fh.stat(); if (!info.isFile()) throw new WorkspaceError("path is not a file", "not_a_file");
-      if (info.size > maxBytes) throw new WorkspaceError(`file is ${info.size} bytes; use read_file_chunk`, "file_too_large");
-      const buffer = Buffer.alloc(Math.min(info.size + 1, maxBytes + 1));
+      const info = await fh.stat({ bigint: true }); if (!info.isFile()) throw new WorkspaceError("path is not a file", "not_a_file");
+      const version = checkFileVersion(info, expectedVersion), size = Number(info.size);
+      if (size > maxBytes) throw new WorkspaceError(`file is ${size} bytes; use read_file_chunk`, "file_too_large");
+      const buffer = Buffer.alloc(Math.min(size + 1, maxBytes + 1));
       const { bytesRead } = await fh.read(buffer, 0, buffer.length, 0);
       if (bytesRead > maxBytes) throw new WorkspaceError("file grew beyond maxBytes", "file_too_large");
-      const data = buffer.subarray(0, bytesRead); return { path: target.relative, bytes: data.length, sha256: sha256(data), data };
+      const data = buffer.subarray(0, bytesRead); checkFileVersion(await fh.stat({ bigint: true }), version); return { version, path: target.relative, bytes: data.length, sha256: sha256(data), data };
     } finally { await fh.close(); }
   }
   async fileInfo(value, { checksum = false } = {}) {
@@ -81,18 +83,20 @@ export class Workspace {
     if (checksum && info.isFile()) { const hasher = createHash("sha256"); for await (const chunk of createReadStream(target.absolute)) hasher.update(chunk); hash = hasher.digest("hex"); }
     return { path: target.relative, absolutePath: target.absolute, bytes: info.size, modifiedAt: info.mtime.toISOString(), sha256: hash, type: info.isFile() ? "file" : info.isDirectory() ? "directory" : "other" };
   }
-  async readChunk(value, { offset = 0, maxBytes = 262144, encoding = "base64", tail = false } = {}) {
+  async readChunk(value, { offset = 0, maxBytes = 262144, encoding = "base64", tail = false, expectedVersion } = {}) {
     integer(offset, "offset", 0, Number.MAX_SAFE_INTEGER); integer(maxBytes, "maxBytes", 4, 1048576);
     if (!["base64", "utf8"].includes(encoding)) throw new WorkspaceError("encoding must be base64 or utf8", "invalid_input");
     const target = await this.resolve(value), fh = await open(target.absolute, "r");
     try {
-      const info = await fh.stat(); if (!info.isFile()) throw new WorkspaceError("path is not a file", "not_a_file");
-      if (tail) offset = Math.max(0, info.size - maxBytes); else offset = Math.min(offset, info.size);
-      const buffer = Buffer.alloc(Math.min(maxBytes, info.size - offset)); const { bytesRead } = await fh.read(buffer, 0, buffer.length, offset); const data = buffer.subarray(0, bytesRead);
-      const decoded = encoding === "utf8" ? utf8Window(data, { final: offset + bytesRead === info.size }) : null;
+      const info = await fh.stat({ bigint: true }); if (!info.isFile()) throw new WorkspaceError("path is not a file", "not_a_file");
+      const version = checkFileVersion(info, expectedVersion), size = Number(info.size);
+      if (tail) offset = Math.max(0, size - maxBytes); else offset = Math.min(offset, size);
+      const buffer = Buffer.alloc(Math.min(maxBytes, size - offset)); const { bytesRead } = await fh.read(buffer, 0, buffer.length, offset); const data = buffer.subarray(0, bytesRead);
+      checkFileVersion(await fh.stat({ bigint: true }), version);
+      const decoded = encoding === "utf8" ? utf8Window(data, { final: offset + bytesRead === size }) : null;
       const consumed = decoded?.consumed ?? bytesRead;
-      return { path: target.relative, offset, nextOffset: offset + consumed, bytes: consumed, totalBytes: info.size,
-        eof: offset + consumed >= info.size, encoding, data: decoded?.content ?? data.toString("base64"), sha256: sha256(data.subarray(0, consumed)), sha256Scope: "chunk", skippedBytes: decoded?.skippedBytes ?? 0 };
+      return { version, path: target.relative, offset, nextOffset: offset + consumed, bytes: consumed, totalBytes: size,
+        eof: offset + consumed >= size, encoding, data: decoded?.content ?? data.toString("base64"), sha256: sha256(data.subarray(0, consumed)), sha256Scope: "chunk", skippedBytes: decoded?.skippedBytes ?? 0 };
     } finally { await fh.close(); }
   }
   async readText(value, { maxBytes = DEFAULT_MAX_FILE_BYTES, startLine = 1, endLine, offset, tail = false, maxScanBytes = 16 * 1024 * 1024 } = {}) {

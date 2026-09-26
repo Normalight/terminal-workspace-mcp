@@ -17,10 +17,14 @@ import { CompletionNotifications } from "./completion-notifications.mjs";
 import { execFileSync } from "node:child_process";
 import { LogWriter } from "./log-store.mjs";
 import { Workspace, WorkspaceError } from "./workspace.mjs";
+import { serviceLogging } from "./service-logging.mjs";
+import { terminalDescription } from "./terminal-tool.mjs";
 import { loadConfig } from "./config.mjs";
 
-const deployment = loadConfig();
+const deployment = loadConfig(process.env.MCP_ISOLATED_SERVICE === '1' ? { env: { MCP_CONFIG_FILE: process.env.MCP_CONFIG_FILE } } : undefined);
 const settings = deployment.config;
+const noHttp = process.env.MCP_ISOLATED_SERVICE !== '1' && process.env.MCP_NO_HTTP === '1';
+const finishLogging = serviceLogging("server", settings.paths.service);
 Object.assign(process.env, deployment.env);
 const workspaceRoot = settings.workspaceRoot;
 const { host, port, path: endpoint, allowAnonymous } = settings.http;
@@ -29,11 +33,13 @@ const allowedHosts = new Set(settings.http.allowedHosts);
 const { enableWrite, enableTerminal, profile: toolProfile } = settings.tools;
 const { maxBytes: maxFileBytes, directMaxBytes: directFileMaxBytes } = settings.files;
 if (!authToken && !allowAnonymous) throw new Error("Set the configured authentication token or explicitly enable http.allowAnonymous for local-only testing");
-if (allowAnonymous && process.env.MCP_NO_HTTP !== "1" && !["127.0.0.1", "localhost", "::1"].includes(host)) throw new Error("Anonymous HTTP is only permitted on loopback");
+if (allowAnonymous && !noHttp && !["127.0.0.1", "localhost", "::1"].includes(host)) throw new Error("Anonymous HTTP is only permitted on loopback");
 if (enableTerminal && !authToken) throw new Error("Terminal execution requires an authentication token");
 const workspace = await new Workspace(workspaceRoot, { enableWrite }).initialize();
 const jobRoot = settings.paths.jobs;
 const childEnv = childEnvironment(workspace.root);
+delete childEnv[settings.auth.tokenEnv];
+delete childEnv[settings.client.tokenEnv];
 await mkdir(childEnv.TMPDIR, { recursive: true });
 const logsConfig = settings.logs;
 const jobManager = await new JobManager({ root: jobRoot, shell: settings.terminal.shell, maxJobs: settings.jobs.maxCount, maxRunning: settings.jobs.maxRunning, retentionDays: settings.jobs.retentionDays, ...logsConfig }).initialize();
@@ -53,7 +59,7 @@ const terminalGcTimer = setInterval(async () => {
 terminalGcTimer.unref();
 let revision = "unknown";
 try { revision = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8", timeout: 2000 }).trim(); } catch {}
-const version = "0.4.1";
+const version = "0.5.0";
 const maxSessions = settings.http.sessions.max;
 let toolCount = 0;
 const startedAt = Date.now();
@@ -97,7 +103,7 @@ export function createMcpServer() {
     version,
   }, {
     capabilities: { logging: {} },
-    instructions: `Personal remote terminal. Prefer absolute paths on every call; use an absolute cwd for new sessions and explicit absolute paths or cd for reused ones. Start each task once; retain the terminal sessionId, commandId and nextCursor. Reuse that terminal for subsequent inspections, or choose a stable terminalKey per task to find the same shell across MCP reconnects. Do not share a key between independent tasks. Reads by key never create a shell; new commands can replace a closed keyed shell, reporting replacedSessionId and losing its old environment. A terminal sessionId is distinct from the MCP-Session-Id HTTP header: client transports should initialize once, reuse that header and one SSE listener across calls, and DELETE when finished. A 404 MCP session requires reinitialization and re-subscription using saved terminal IDs; do not rerun the command. Commands returned as running subscribe to completion notices via notifications/message (logger=terminal-workspace.completion, level=notice). Keep GET SSE or stdio listening; on data.event=command_completed, verify status/exitCode and fetch remaining output with sessionId/commandId/cursor and no command. If notifications are unsupported, poll with sessionId/cursor, waitMs=10000..30000. Use notifyOnCompletion=false to opt out; after a new MCP connection, send sessionId/commandId and notifyOnCompletion=true to re-subscribe. Waiting/output limits do not stop execution or justify rerunning. Check status/exitCode and drain output before reporting completion. Save IDs/cursors/log/artifact paths for handoff; notification delivery requires an active listening client and does not by itself resume a model turn. Idle shells expire after ${settings.terminal.idleTtlMs}ms (0 disables idle expiry); running commands, child processes, attached clients and @mcp_keep=1 sessions are protected. Use node "$MCP_TERMINAL_ADMIN" list or cleanup (--apply to reclaim); logs remain. Prefer absolute paths for get_file. Use input or key=C-c for interaction; command=exit closes a finished shell after checking background jobs.`,
+    instructions: `${terminalDescription} Prefer absolute paths. Idle shells expire after ${settings.terminal.idleTtlMs}ms (0 disables expiry); active tasks and kept sessions are protected. Save task IDs/cursors and artifact paths in persistent checkpoints for handoff.`,
   });
   const completions = new CompletionNotifications({ terminals: terminalManager, jobs: jobManager,
     ready: () => !!server.server.transport && (server.server.transport.notificationStreamOpen ?? true),
@@ -315,7 +321,7 @@ async function handleMcp(req, res) {
   sendJson(res, 405, { error: "method not allowed" }, { allow: "GET, POST, DELETE" });
 }
 
-if (process.env.MCP_NO_HTTP !== "1") {
+if (!noHttp) {
   createMcpServer(); // Establish the advertised tool count before the first session.
   const httpServer = createHttpServer((req, res) => {
     void (async () => {
@@ -387,7 +393,7 @@ if (process.env.MCP_NO_HTTP !== "1") {
     clearInterval(gcTimer);
     for (const { transport } of sessions.values()) await transport.close().catch(() => {});
     auditWriter.end();
-    httpServer.close(() => process.exit(0));
+    httpServer.close(async () => { await finishLogging(); process.exit(0); });
     setTimeout(() => process.exit(0), 3000).unref();
   }
   process.on("SIGINT", shutdown);

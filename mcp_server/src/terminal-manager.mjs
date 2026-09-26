@@ -7,9 +7,12 @@ import { promisify } from "node:util";
 import { atomicJson, atomicWrite, delay, integer, jsonFile, KeyedMutex, OperationError, quote } from "./runtime.mjs";
 import { DEFAULT_SEGMENT_BYTES, readLog } from "./log-store.mjs";
 
+import { environmentScript, isolatedLaunch, shellRc } from './terminal-shell.mjs';
+import { submitCommand, commandState } from './terminal-commands.mjs';
+import { readCommandOutput } from './terminal-output.mjs';
+
 const exec = promisify(execFile);
 const ID = /^term_[a-f0-9-]{36}$/;
-const COMMAND = /^cmd_[a-f0-9-]{36}$/;
 const KEY = /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,119}$/;
 export class TerminalManager {
   constructor({ root, env = process.env, tmux = "tmux", maxSessions = 32, segmentBytes = DEFAULT_SEGMENT_BYTES, maxSegments = 0 } = {}) {
@@ -47,10 +50,15 @@ export class TerminalManager {
   }
   async pane(id) {
     try {
-      const value = await this.run(["display-message", "-p", "-t", `${id}:0.0`, "#{pane_dead}\t#{pane_dead_status}\t#{pane_pid}\t#{pane_current_path}"]);
-      const [dead, exit, pid, ...cwd] = value.split("\t");
-      return { alive: dead === "0", exitCode: dead === "1" && exit !== "" ? Number(exit) : null, pid: Number(pid), cwd: cwd.join("\t") };
-    } catch { return { alive: false, exitCode: null, pid: null, cwd: null }; }
+      const value = await this.run(["display-message", "-p", "-t", `${id}:0.0`, "#{pane_dead}\t#{pane_dead_status}\t#{pane_pid}\t#{pane_pipe}\t#{pane_current_path}"]);
+      const [dead, exit, pid, pipe, ...cwd] = value.split("\t");
+      return { alive: dead === "0", exitCode: dead === "1" && exit !== "" ? Number(exit) : null, pid: Number(pid), pipeActive: pipe === "1", cwd: cwd.join("\t") };
+    } catch (error) {
+      if (/can't find (session|window|pane)|no server running|Connection refused|No such file/.test(error.message)) return { alive: false, exitCode: null, pid: null, cwd: null };
+      // A failed inspection is not evidence that the task died. In particular,
+      // do not replace a keyed shell after a tmux timeout or permission error.
+      throw error;
+    }
   }
   keyFile(key) {
     if (typeof key !== 'string' || !KEY.test(key)) throw new OperationError('terminalKey must be 1..120 ASCII letters/digits or ._:/-, starting with a letter/digit', 'invalid_input');
@@ -61,7 +69,7 @@ export class TerminalManager {
       const panes = await this.run(['list-panes', '-a', '-F', '#{session_name}\t#{pane_dead}']);
       return new Set(panes.split('\n').map(line => line.split('\t')).filter(([name, dead]) => ID.test(name) && dead === '0').map(([name]) => name)).size;
     } catch (error) {
-      if (/no server running|Connection refused|No such file/.test(error.message)) return 0;
+      if (/no server running|no current target|no sessions|Connection refused|No such file/.test(error.message)) return 0;
       throw error;
     }
   }
@@ -97,40 +105,26 @@ export class TerminalManager {
       await mkdir(path.join(dir, "commands"), { recursive: true, mode: 0o700 });
       const rc = path.join(dir, "shell.rc"), log = path.join(dir, "terminal.log"), ready = path.join(dir, "ready");
       const logToken = randomUUID();
-      const meta = { sessionId: id, owner: this.owner, managerId: this.managerId, shellStateVersion: 1, outputProtocol: 1, name, cwd, createdAt: new Date().toISOString(), log, logs: this.logs, cols, rows, ...(terminalKey === undefined ? {} : { terminalKey }) };
+      const meta = { sessionId: id, owner: this.owner, managerId: this.managerId, shellStateVersion: 2, outputProtocol: 2, name, cwd, createdAt: new Date().toISOString(), log, logs: this.logs, cols, rows, ...(terminalKey === undefined ? {} : { terminalKey }) };
       await atomicJson(path.join(dir, "meta.json"), meta);
       // Persist the binding before shell launch. A service crash cannot leave a
       // live keyed shell undiscoverable to its next caller.
       if (bindingFile) await atomicJson(bindingFile, { terminalKey, sessionId: id });
-      await atomicWrite(rc, [
-        "HISTFILE=" + quote(path.join(dir, "history")),
-        "PS1='mcp:\\w\\$ '", "unset PROMPT_COMMAND", "set +o history",
-        "__csy_prompt() {", "  local __csy_code=$?",
-        "  if [[ -n ${__csy_result_file-} ]]; then",
-        `    printf '\\033]777;${logToken};%s;%d\\007' "\${__csy_result_file##*/}" "$__csy_code"`,
-        "    unset __csy_result_file", "  fi",
-        "  printf ready > " + quote(ready), "  __csy_at_prompt=1", "}", "PROMPT_COMMAND=__csy_prompt",
-        "__csy_debug() {",
-        '  if [[ ${__csy_at_prompt-} == 1 && $BASH_COMMAND != __csy_prompt && ${FUNCNAME[1]-} != __csy_prompt ]]; then',
-        "    __csy_at_prompt=0", "    command rm -f -- " + quote(ready), "  fi", "}",
-        "trap '__csy_debug' DEBUG", "",
-      ].join("\n"));
-      const flags = [];
-      for (const [key, value] of Object.entries({ ...this.env, ...env, HISTFILE: path.join(dir, "history"), MCP_TERMINAL_ROOT: this.root, MCP_TERMINAL_ADMIN: fileURLToPath(new URL("../scripts/terminals.mjs", import.meta.url)) })) {
-        if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key) && typeof value === "string") flags.push("-e", `${key}=${value}`);
-      }
+      await atomicWrite(rc, shellRc({ directory: dir, ready, token: logToken }));
+      const environmentFile = path.join(dir, 'environment.sh');
+      await atomicWrite(environmentFile, environmentScript({ ...this.env, ...env, HISTFILE: path.join(dir, "history"), MCP_TERMINAL_ROOT: this.root, MCP_TERMINAL_ADMIN: fileURLToPath(new URL("../scripts/terminals.mjs", import.meta.url)) }));
       // wait-for gates shell startup so pipe-pane is installed before any output.
       const gate = `gate_${randomUUID()}`;
-      const launch = `${quote(this.tmux)} -S ${quote(this.socket)} wait-for ${quote(gate)}; exec /bin/bash --noprofile --rcfile ${quote(rc)} -i`;
+      const launch = `${quote(this.tmux)} -S ${quote(this.socket)} wait-for ${quote(gate)}; exec ${isolatedLaunch(environmentFile, ['/bin/bash', '--noprofile', '--rcfile', rc, '-i'])}`;
       try {
-        await this.run(["new-session", "-d", "-s", id, "-n", "mcp", "-c", cwd, "-x", String(cols), "-y", String(rows), ...flags, launch]);
+        await this.run(["new-session", "-d", "-s", id, "-n", "mcp", "-c", cwd, "-x", String(cols), "-y", String(rows), launch]);
         await this.run(["set-option", "-t", id, "@mcp_manager", this.owner]);
         await this.run(["set-option", "-t", id, "@mcp_owner", this.managerId]);
         meta.tmuxSessionId = await this.run(["display-message", "-p", "-t", id, "#{session_id}"]);
         await atomicJson(path.join(dir, "meta.json"), meta);
         await this.run(["set-option", "-t", id, "remain-on-exit", "on"]);
         await this.run(["set-option", "-t", id, "history-limit", "10000"]);
-        await this.run(["pipe-pane", "-O", "-t", `${id}:0.0`, `${quote(process.execPath)} ${quote(this.logger)} ${quote(log)} ${this.logs.segmentBytes} ${this.logs.maxSegments} ${quote(logToken)}`]);
+        await this.run(["pipe-pane", "-O", "-t", `${id}:0.0`, isolatedLaunch(environmentFile, [process.execPath, this.logger, log, String(this.logs.segmentBytes), String(this.logs.maxSegments), logToken])]);
         await this.run(["wait-for", "-S", gate]);
         for (let i = 0; i < 100; i++) { if (await stat(ready).then(() => true, () => false)) break; await delay(20); }
         if (!await stat(ready).then(() => true, () => false)) throw new OperationError("terminal shell did not become ready", "startup_timeout");
@@ -162,12 +156,12 @@ export class TerminalManager {
     } while (true);
     return { sessionId: id, status: state.status, ...output };
   }
-  async send(id, text, enter = false) {
+  async send(id, text, enter = false, beforeDispatch = async () => {}) {
     if (typeof text !== "string" || Buffer.byteLength(text) > 65536) throw new OperationError("input exceeds 65536 bytes", "invalid_input");
     const state = await this.status(id); if (!state.alive) throw new OperationError("terminal is closed", "terminal_closed");
     if (text) {
       const file = path.join(this.dir(id), `input-${randomUUID()}`), buffer = `buf_${randomUUID()}`;
-      try { await writeFile(file, text, { mode: 0o600 }); await this.run(["load-buffer", "-b", buffer, file]); await this.run(["paste-buffer", "-d", "-b", buffer, "-t", `${id}:0.0`]); }
+      try { await writeFile(file, text, { mode: 0o600 }); await this.run(["load-buffer", "-b", buffer, file]); await beforeDispatch(); await this.run(["paste-buffer", "-d", "-b", buffer, "-t", `${id}:0.0`]); }
       finally { await unlink(file).catch(() => {}); await this.run(["delete-buffer", "-b", buffer]).catch(() => {}); }
     }
     if (enter) await this.run(["send-keys", "-t", `${id}:0.0`, "Enter"]);
@@ -182,56 +176,9 @@ export class TerminalManager {
       return { sessionId: id, sent: true };
     });
   }
-  async execute(id, { command, waitMs = 1000, maxBytes = 65536 } = {}) {
-    if (typeof command !== "string" || !command.trim() || command.length > 20000) throw new OperationError("command must be 1..20000 characters", "invalid_input");
-    integer(waitMs, "waitMs", 0, 30000);
-    const commandId = await this.locked(id, async () => {
-      const state = await this.status(id); if (!state.alive) throw new OperationError("terminal is closed", "terminal_closed");
-      if (state.activeCommandId && (await this.commandStatus(id, state.activeCommandId)).status === "running") throw new OperationError("a tracked command is still running; send interactive input or poll this session", "terminal_busy");
-      if (state.shellStateVersion === 1) {
-        // Raw input/direct tmux use can be busy without a tracked command.
-        // Allow the prompt hook to finish publishing ready after its log marker.
-        let ready = false;
-        for (let i = 0; i < 6; i++) {
-          ready = await readFile(path.join(this.dir(id), 'ready'), 'utf8').then(value => value === 'ready', () => false);
-          if (ready) break;
-          await delay(20);
-        }
-        if (!ready) throw new OperationError('shell is not at a prompt; use input/key for the current interaction', 'terminal_busy');
-      }
-      const cid = `cmd_${randomUUID()}`, dir = path.join(this.dir(id), "commands"), script = path.join(dir, `${cid}.sh`);
-      await atomicJson(path.join(this.dir(id), 'activity.json'), { lastUsedAt: new Date().toISOString() });
-      const page = await readLog(state.log, { maxBytes: 4, segmentBytes: state.logs.segmentBytes, final: !state.alive });
-      await atomicJson(path.join(dir, `${cid}.json`), { commandId: cid, sessionId: id, command, startedAt: new Date().toISOString(), startCursor: page.endCursor });
-      await atomicWrite(script, command + "\n");
-      await atomicJson(path.join(this.dir(id), "current.json"), { commandId: cid });
-      const result = path.join(dir, `${cid}.result.json`);
-      await this.send(id, `__csy_result_file=${quote(result)}; . ${quote(script)}`, true);
-      return cid;
-    });
-    const until = Date.now() + waitMs;
-    let result;
-    do { result = await this.commandStatus(id, commandId); if (result.status !== "running" || Date.now() >= until) break; await delay(40); } while (true);
-    const output = await this.read(id, { cursor: result.startCursor, maxBytes });
-    return { ...result, output };
-  }
-  async commandStatus(id, commandId) {
-    if (!COMMAND.test(commandId)) throw new OperationError("invalid command id", "invalid_input");
-    const dir = path.join(this.dir(id), "commands"), meta = await jsonFile(path.join(dir, `${commandId}.json`));
-    const resultPath = path.join(dir, `${commandId}.result.json`), result = await jsonFile(resultPath, null);
-    const pane = await this.pane(id), session = await jsonFile(path.join(this.dir(id), 'meta.json'));
-    const drained = !pane.alive && session.outputProtocol === 1 ? await jsonFile(path.join(this.dir(id), 'log-drained.json'), null) : null;
-    const outputPending = !result && !pane.alive && session.outputProtocol === 1 && !drained;
-    if (outputPending && pane.pid) {
-      // tmux marks the pane dead after its PTY/pipe buffers drain, but
-      // remain-on-exit keeps the pipe open. Close it to obtain the logger's EOF
-      // acknowledgement for exit/exec.
-      await this.run(['if-shell', '-F', '-t', `${id}:0.0`, '#{pane_dead}', `pipe-pane -t '${id}:0.0'`]);
-    }
-    const status = result ? (result.exitCode === 0 ? "succeeded" : "failed") : pane.alive || outputPending ? "running" : "terminal_closed";
-    const finishedAt = result ? (await stat(resultPath)).mtime.toISOString() : null;
-    return { ...meta, status, exitCode: result?.exitCode ?? pane.exitCode, finishedAt, outputEndCursor: result?.outputEndCursor ?? drained?.outputEndCursor ?? null };
-  }
+  async execute(id, options) { return submitCommand(this, id, options); }
+  async commandStatus(id, commandId) { return commandState(this, id, commandId); }
+  async readCommand(id, commandId, options) { return readCommandOutput(this, id, commandId, options); }
   async resize(id, cols, rows) {
     integer(cols, "cols", 20, 500); integer(rows, "rows", 5, 300); await this.status(id);
     await this.run(["resize-window", "-t", `${id}:0`, "-x", String(cols), "-y", String(rows)]); return { sessionId: id, cols, rows };
@@ -240,7 +187,7 @@ export class TerminalManager {
     return this.locked(id, async () => {
       const state = await this.status(id);
       if (state.alive || state.pid) await this.run(["kill-session", "-t", id]).catch(() => {});
-      if (state.outputProtocol === 1) {
+      if (state.outputProtocol >= 1) {
         for (let i = 0; i < 100; i++) {
           if (await jsonFile(path.join(this.dir(id), 'log-drained.json'), null)) break;
           await delay(20);

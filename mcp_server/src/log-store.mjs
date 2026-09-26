@@ -30,29 +30,45 @@ export function utf8Window(buffer, { final = false } = {}) {
   }
   return { content: buffer.subarray(start, end).toString("utf8"), consumed: end, skippedBytes: start };
 }
-export async function readLog(base, { cursor, maxBytes = 65536, segmentBytes = DEFAULT_SEGMENT_BYTES, final = false } = {}) {
+export async function readLog(base, { cursor, maxBytes = 65536, segmentBytes = DEFAULT_SEGMENT_BYTES, final = false, minCursor = 0, endCursor } = {}) {
   integer(maxBytes, "maxBytes", 4, 2 * 1024 * 1024);
   if (cursor !== undefined) integer(cursor, "cursor", 0, Number.MAX_SAFE_INTEGER);
   const segments = await logSegments(base, segmentBytes);
   const first = segments[0]?.start ?? 0;
-  const end = segments.length ? segments.at(-1).start + segments.at(-1).bytes : 0;
+  const liveEnd = segments.length ? segments.at(-1).start + segments.at(-1).bytes : 0;
+  const knownEnd = endCursor ?? liveEnd;
+  const end = Math.min(knownEnd, liveEnd);
   const requested = cursor ?? Math.max(first, end - maxBytes);
-  const from = Math.max(first, Math.min(requested, end));
-  let offset = from;
+  const desired = Math.min(end, Math.max(minCursor, requested));
+  let from = Math.min(end, Math.max(first, desired));
+  let offset = from, missingBytes = 0;
   const chunks = [];
   for (const s of segments) {
-    if (offset >= s.start + s.bytes || offset < s.start || offset - from >= maxBytes) continue;
+    if (offset >= s.start + s.bytes || offset - from >= maxBytes || offset >= end) continue;
+    if (offset < s.start) {
+      // Return one contiguous page. A missing middle segment must advance on
+      // the next read, rather than trapping the reader at the same cursor.
+      if (chunks.length) break;
+      missingBytes += Math.min(s.start, end) - offset;
+      from = offset = Math.min(s.start, end);
+      if (offset >= end) break;
+    }
     const handle = await open(s.file, "r").catch(() => null);
     if (!handle) continue;
     try {
-      const buffer = Buffer.alloc(Math.min(s.bytes - (offset - s.start), maxBytes - (offset - from)));
+      const buffer = Buffer.alloc(Math.min(s.bytes - (offset - s.start), maxBytes - (offset - from), end - offset));
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset - s.start);
       chunks.push(buffer.subarray(0, bytesRead)); offset += bytesRead;
     } finally { await handle.close(); }
   }
+  if (!chunks.length && offset < end) { missingBytes += end - offset; from = offset = end; }
   const decoded = utf8Window(Buffer.concat(chunks), { final: final && offset === end });
-  return { ...decoded, cursor: from, nextCursor: from + decoded.consumed, endCursor: end,
-    earliestCursor: first, truncated: from + decoded.consumed < end, droppedBytes: Math.max(0, first - requested) };
+  const readThrough = from + decoded.consumed;
+  const missingTail = readThrough >= end && knownEnd > liveEnd;
+  const nextCursor = missingTail ? knownEnd : readThrough;
+  return { ...decoded, requestedCursor: requested, cursor: from, nextCursor, endCursor: knownEnd,
+    earliestCursor: first, truncated: nextCursor < knownEnd,
+    droppedBytes: Math.max(0, Math.min(first, end) - desired) + missingBytes + (missingTail ? Math.max(0, knownEnd - Math.max(liveEnd, minCursor, requested)) : 0) };
 }
 export class LogWriter extends Writable {
   constructor(base, { segmentBytes = DEFAULT_SEGMENT_BYTES, maxSegments = 0 } = {}) {

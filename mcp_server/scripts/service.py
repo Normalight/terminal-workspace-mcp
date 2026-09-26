@@ -16,13 +16,6 @@ ROOT = Path(__file__).resolve().parents[2]
 SERVER = ROOT / 'mcp_server/src/server.mjs'
 
 
-def inside(value):
-    path = Path(value).resolve()
-    if not path.is_relative_to(ROOT):
-        raise ValueError(f'managed state must be inside {ROOT}')
-    return path
-
-
 def identity(pid):
     try:
         fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
@@ -62,14 +55,23 @@ def main():
     args = parser.parse_args()
     script = SERVER if args.component == 'server' else SERVER.with_name('tcp-relay.mjs')
     is_owned = lambda meta: owned(meta, script)
-    config_path = inside(args.config)
+    config_path = Path(args.config).resolve()
     resolved = subprocess.run([shutil.which('node') or 'node', str(ROOT / 'mcp_server/scripts/config.mjs'), 'runtime', '--config', str(config_path)], check=True, capture_output=True, text=True)
     loaded = json.loads(resolved.stdout)
     config = loaded['env']
-    workspace = inside(config['MCP_WORKSPACE_ROOT'])
+    workspace = Path(config['MCP_WORKSPACE_ROOT']).resolve()
+    def managed(value):
+        target = Path(value).resolve()
+        if not target.is_relative_to(workspace):
+            raise ValueError('managed service paths must remain inside workspaceRoot')
+        return target
     health_url = loaded['healthOrigin'] + '/healthz'
     connect = urlparse(loaded['healthOrigin'])
-    runtime = inside(config['MCP_SERVICE_ROOT'])
+    runtime = managed(config['MCP_SERVICE_ROOT'])
+    supervised = runtime / 'supervised-services.json'
+    if supervised.exists() and json.loads(supervised.read_text()).get('installed'):
+        subprocess.run([shutil.which('python3') or 'python3', '-B', str(ROOT / 'mcp_server/scripts/services.py'), args.action, '--config', str(config_path), '--component', args.component], check=True)
+        return
     runtime.mkdir(parents=True, exist_ok=True)
     state_path = runtime / ('service.json' if args.component == 'server' else 'relay-service.json')
     listen_host, listen_port = connect.hostname, connect.port
@@ -114,10 +116,10 @@ def main():
     env.update({'TMPDIR': str(workspace / '.tmp'), 'TMP': str(workspace / '.tmp'), 'TEMP': str(workspace / '.tmp'), 'XDG_CACHE_HOME': str(workspace / '.cache'), 'npm_config_cache': str(workspace / '.cache/npm')})
     for key in ['MCP_WORKSPACE_ROOT', 'MCP_JOB_ROOT', 'MCP_TERMINAL_ROOT']:
         if key in env:
-            inside(env[key]).mkdir(parents=True, exist_ok=True)
+            managed(env[key]).mkdir(parents=True, exist_ok=True)
     for key in ['MCP_HTTP_AUDIT_LOG']:
         if key in env:
-            inside(env[key]).parent.mkdir(parents=True, exist_ok=True)
+            managed(env[key]).parent.mkdir(parents=True, exist_ok=True)
     stdout_log, stderr_log = runtime / f'{args.component}.stdout.log', runtime / f'{args.component}.stderr.log'
     for log in [stdout_log, stderr_log]:
         rotate(log)

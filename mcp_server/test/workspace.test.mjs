@@ -49,3 +49,17 @@ test('search budgets, cancellation and catastrophic regex run away from the serv
  assert.equal((await w.searchText('target',{maxResults:1})).matches.length,1);
  }finally{await f.cleanup();}
 });
+
+test('chunk resumes detect same-size edits and replaced files using version guards', async () => {
+  const f = await fixture();
+  try {
+    const w = await new Workspace(f.root, { enableWrite: true }).initialize();
+    await w.writeText('transfer.txt', 'abcdefgh');
+    const a = await w.readChunk('transfer.txt', { maxBytes: 4 }); assert(a.version);
+    await w.writeText('transfer.txt', 'ABCDEFGH');
+    await assert.rejects(w.readChunk('transfer.txt', { offset: a.nextOffset, maxBytes: 4, expectedVersion: a.version }), { code: 'file_changed' });
+    const b = await w.readChunk('transfer.txt', { maxBytes: 4 });
+    const c = await w.readChunk('transfer.txt', { offset: b.nextOffset, maxBytes: 4, expectedVersion: b.version });
+    assert.equal(c.version, b.version); assert(c.eof);
+  } finally { await f.cleanup(); }
+});

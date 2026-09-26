@@ -33,15 +33,14 @@ export class TerminalLogWriter extends LogWriter {
       }
       const end = this.pending.indexOf(7, this.prefix.length);
       if (end < 0 && this.pending.length < this.prefix.length + 80) break;
-      const match = end < 0 ? null : /^(cmd_[a-f0-9-]{36})\.result\.json;([0-9]{1,3})$/.exec(this.pending.subarray(this.prefix.length, end).toString());
-      if (!match || Number(match[2]) > 255) {
+      const match = end < 0 ? null : /^(cmd_[a-f0-9-]{36})\.result\.json(\.start)?;([0-9]{1,3})$/.exec(this.pending.subarray(this.prefix.length, end).toString());
+      if (!match || Number(match[3]) > 255) {
         await super.append(this.pending.subarray(0, 1));
         this.pending = this.pending.subarray(1);
         continue;
       }
-      await this.record(path.join(this.directory, 'commands', `${match[1]}.result.json`), {
-        exitCode: Number(match[2]), outputEndCursor: this.cursor,
-      });
+      await this.record(path.join(this.directory, 'commands', `${match[1]}.${match[2] ? 'output-start' : 'result'}.json`),
+        match[2] ? { startCursor: this.cursor } : { exitCode: Number(match[3]), outputEndCursor: this.cursor });
       this.pending = this.pending.subarray(end + 1);
     }
   }

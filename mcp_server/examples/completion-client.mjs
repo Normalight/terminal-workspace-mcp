@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { outputCheckpoint } from '../client/output-checkpoint.mjs';
 import { ReconnectingTerminalClient } from '../client/reconnecting-client.mjs';
 import { atomicJson } from '../src/runtime.mjs';
 import { loadConfig } from '../src/config.mjs';
@@ -27,8 +28,10 @@ let state = resume ? JSON.parse(await readFile(stateFile, 'utf8')) : { terminalK
 const save = () => atomicJson(stateFile, state);
 const writeOutput = text => new Promise((resolve, reject) => process.stdout.write(text, error => error ? reject(error) : resolve()));
 async function consume(page) {
+  const next = outputCheckpoint(state, page);
   await writeOutput(page.stdout);
-  state = { ...state, sessionId: page.sessionId, commandId: page.commandId, cursor: page.nextCursor, phase: 'monitoring' };
+  state = next;
+  if (state.outputGap) console.error(JSON.stringify({ code: 'output_incomplete', droppedBytes: state.droppedBytes ?? 0 }));
   await save(); // A crash before this checkpoint may repeat a page, never a command.
 }
 async function finish() {
@@ -40,12 +43,13 @@ async function finish() {
     await consume(page);
     if (!page.outputTruncated) break;
   }
-  state.phase = 'complete'; await save();
-  if (final.exitCode !== 0) process.exitCode = 1;
+  state.phase = state.outputGap || !state.outputComplete ? 'incomplete' : 'complete'; await save();
+  if (final.exitCode !== 0 || state.phase !== 'complete') process.exitCode = 1;
 }
 try {
   console.error(JSON.stringify({ stateFile, resume }));
   if (resume) {
+    if (!state || typeof state !== 'object' || (!state.sessionId && !state.terminalKey)) throw Error('Invalid checkpoint: missing saved terminal selector');
     // This branch submits no commands, even if the initial submission reply was
     // lost. A unique key locates that workflow's shell; missing state fails closed.
     const selector = state.sessionId ? { sessionId: state.sessionId } : { terminalKey: state.terminalKey };

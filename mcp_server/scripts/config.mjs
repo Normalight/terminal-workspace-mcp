@@ -5,8 +5,8 @@ import { realpath } from 'node:fs/promises';
 import { loadConfig, pluginConnection } from '../src/config.mjs';
 import { atomicWrite } from '../src/runtime.mjs';
 
-const { values, positionals } = parseArgs({ options: { config: { type: 'string' }, 'plugin-dir': { type: 'string' } }, allowPositionals: true });
-const loaded = loadConfig({ file: values.config });
+const { values, positionals } = parseArgs({ options: { config: { type: 'string' }, isolated: { type: 'boolean' }, 'plugin-dir': { type: 'string' } }, allowPositionals: true });
+const loaded = loadConfig({ file: values.config, ...(values.isolated ? { env: {} } : {}) });
 const action = positionals[0] ?? 'show';
 if (positionals.length > 1) throw new Error('expected one action: show, sync-plugin, or runtime');
 if (action === 'show') {

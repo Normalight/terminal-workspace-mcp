@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-09-26
+
+- Bound default output to the saved command, preserve missing-byte evidence, and distinguish command completion from output completeness. Explicit terminal scope retains PTY tail reads.
+- Persist shell execution receipts independently of log collection, identify failed/uncertain submissions, and keep incomplete legacy histories bounded.
+- Cancel stalled initialization promptly, enforce total completion deadlines, and retry a command only after a definitive origin rejection of its expired HTTP session.
+- Add file-version guards for chunked transfers and validate saved resume identities/output completeness.
+- Isolate new shells and collectors from stale tmux-server environments, and propagate inspection failures without replacing a live keyed terminal.
+- Split command lifecycle, shell protocol, output paging, request policy and checkpoint helpers.
+- Add independent systemd services for MCP, tmux, relay and optional tunnel, explicit private configuration, workspace logs and safe adoption of existing tmux processes.
+- Verify six concurrent clients, independent read cursors, same-shell contention, exactly-once observed side effects across MCP restart, and output-loss recovery.
+
 
 - Add bounded client reconnect, shared initialization, durable completion reconciliation and private resumable checkpoints; never replay uncertain command submissions.
 - Return session recovery guidance on HTTP 404 and audit responses interrupted before completion.

@@ -53,18 +53,18 @@ export class TerminalAdmin {
     const lastUsedAt = Math.max(Date.parse(meta?.createdAt ?? ''), Date.parse(activity?.lastUsedAt ?? meta?.createdAt ?? ''), Date.parse(finishedAt ?? meta?.createdAt ?? ''));
     const idleMs = Number.isFinite(lastUsedAt) ? Math.max(0, now - lastUsedAt) : null;
     let idleShell = false;
-    if (panes.length === 1 && !panes[0].dead && commandStatus !== 'running' && commandStatus !== 'unknown') {
+    if (panes.length === 1 && !panes[0].dead && !['running', 'starting', 'submission_uncertain', 'unknown'].includes(commandStatus)) {
       try {
         const pid = panes[0].pid;
         const children = await readFile(`/proc/${pid}/task/${pid}/children`, 'utf8');
         const comm = await readFile(`/proc/${pid}/comm`, 'utf8');
         // Builtins such as read and while have no child process. Only a shell
         // whose pre-command hook invalidates this prompt marker can prove idle.
-        const ready = meta?.shellStateVersion === 1 && await readFile(path.join(t.dir(name), 'ready'), 'utf8');
+        const ready = meta?.shellStateVersion >= 1 && await readFile(path.join(t.dir(name), 'ready'), 'utf8');
         idleShell = children.trim() === '' && comm.trim() === 'bash' && ready === 'ready';
       } catch { /* Unknown process state is never eligible for idle cleanup. */ }
     }
-    const state = panes.length && panes.every(p => p.dead) ? 'exited' : commandStatus === 'running' ? 'active' : idleShell ? 'idle' : 'live';
+    const state = panes.length && panes.every(p => p.dead) ? 'exited' : ['running', 'starting', 'submission_uncertain', 'unknown'].includes(commandStatus) ? 'active' : idleShell ? 'idle' : 'live';
     const eligible = state === 'exited' || (state === 'idle' && idleTtlMs > 0 && idleMs !== null && idleMs >= idleTtlMs);
     const reclaimable = managed && eligible && !keep && attached === 0 && windows.length === 1 && panes.length === 1;
     const reason = !managed ? 'unverified_owner' : keep ? 'kept_session' : attached > 0 ? 'attached_client' : windows.length !== 1 || panes.length !== 1 ? 'modified_layout' : state === 'exited' ? 'exited_managed_session' : reclaimable ? 'idle_expired' : state === 'idle' ? 'idle_not_expired' : 'live_session';

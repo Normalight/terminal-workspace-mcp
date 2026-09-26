@@ -2,7 +2,7 @@
 
 [Public repository](https://github.com/Normalight/terminal-workspace-mcp) · [MIT license](LICENSE) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
-A personal remote terminal for the account running the server. Release 0.4.1 exposes two tools by default:
+A personal remote terminal for the account running the server. Release 0.5.0 exposes two tools by default:
 
 - `execute_command`: shell commands, persistent tmux sessions, interactive input, and output polling.
 - `get_file`: original files and images, with resumable chunks for large files.
@@ -44,9 +44,14 @@ From the repository root:
 
 ```bash
 node mcp_server/scripts/config.mjs show
-python3 -B mcp_server/scripts/service.py start
-python3 -B mcp_server/scripts/service.py status
+python3 -B mcp_server/scripts/services.py prepare
+# Review generated units and obtain any filesystem-policy exception first.
+python3 -B mcp_server/scripts/services.py install
+python3 -B mcp_server/scripts/services.py start --component all
+python3 -B mcp_server/scripts/services.py status --component all
 ```
+
+See [independent service deployment](SERVICES.md) for linger, optional tunnel supervision, preserving active tmux tasks during migration, and cgroup verification. The project has no botmux runtime dependency. The older `service.py` remains a detached development launcher until supervised installation, then delegates to systemd.
 
 Supply the existing token through its configured variable or a mode-0600 `mcp_server/config.local.json`:
 
@@ -77,10 +82,10 @@ See the [ChatGPT deployment and update guide](CHATGPT.md) ([中文](CHATGPT.zh-C
 
 Prefer absolute paths on every call, including `get_file`. Use an absolute `cwd` for a new session; on reused sessions, use absolute operands or explicitly `cd -- /absolute/path`. `cwd` does not reset an existing shell. Idle shells can be reclaimed, so do not rely on a previous session's directory or environment for independent operations.
 
-Start a shell and keep its returned `sessionId`:
+Choose a stable task key before submitting, then keep its returned `sessionId` and `commandId`:
 
 ```json
-{"command":"pwd; export MODE=dev","waitMs":1000}
+{"terminalKey":"project/agent/task","command":"pwd; export MODE=dev","waitMs":1000}
 ```
 
 Reuse that ID for subsequent commands to preserve `cd`, environment activation, shell variables, and background processes:
@@ -104,10 +109,10 @@ Concurrent key lookups/creation use cross-process locks; one key creates only on
 `waitMs` (0–30000 ms) bounds this call's wait. `maxBytes` (4–1048576, default 65536) bounds the returned output page. Neither ends a command. A response includes `status`, `exitCode`, `sessionId`, `commandId`, `stdout`, `nextCursor`, and truncation/wait indicators. When a command is still running, or output remains unread, continue:
 
 ```json
-{"sessionId":"term_...","cursor":1234,"waitMs":1000,"maxBytes":65536}
+{"sessionId":"term_...","commandId":"cmd_...","cursor":1234,"waitMs":1000,"maxBytes":65536}
 ```
 
-Use the previous `nextCursor` to avoid repeating output. Omitting `cursor` reads a tail. To answer a prompt, send literal input with a newline for Enter, or a control key:
+Use the previous `nextCursor` to avoid repeating output. Default `outputScope:"command"` is bounded to the tracked command; omitting `cursor` starts at its beginning. Pin `commandId` for historical reads. Explicit `outputScope:"terminal"` reads the shared terminal stream and tails it when `cursor` is omitted. Check `outputGap`, `droppedBytes` and `outputComplete`: a successful command can have incomplete output due to retention, collector failure or legacy metadata. `executionStatus` and `outputStatus` explain this distinction. Completed empty reads return promptly. To answer a prompt, send literal input with a newline for Enter, or a control key:
 
 ```json
 {"sessionId":"term_...","input":"yes\n","cursor":1234,"waitMs":1000}
@@ -119,11 +124,11 @@ Use the previous `nextCursor` to avoid repeating output. Omitting `cursor` reads
 
 Send `command` and interactive input in separate calls. Only one tracked command may run per shell. Independent work can open another session. `cwd` applies when creating a session; use `cd` to change an existing shell's directory. An explicit deadline can be implemented with the shell's `timeout` command.
 
-PTY output combines stdout/stderr and includes command echo and ANSI control sequences. `stderr` is empty because the terminal merges both streams. For structured output, redirect to a file and retrieve it with `get_file`. Large responses place the full page in `structuredContent`, with a short text summary.
+PTY output combines stdout/stderr and may include interactive echo, ANSI control sequences and background-process output during the selected command range. It is a time-bounded terminal stream, not strict process attribution. `stderr` is empty because the terminal merges both streams. For structured output, redirect to a file and retrieve it with `get_file`. Large responses place the full page in `structuredContent`, with a short text summary.
 
 The managed Bash uses an isolated rcfile, `PROMPT_COMMAND`, and a `DEBUG` trap to track prompt readiness. Preserve these hooks and the internal command-tracking variables. A private PTY marker lets the logger confirm completion only after preceding command output is written; bookkeeping markers are omitted from returned output. `outputEndCursor` identifies that confirmed boundary when available. Shell `exit`/`exec` may return `terminal_closed` after log drainage instead of a prompt-generated result. `command:"exit"` ends the shell and retains its logs. tmux survives MCP server restarts; machine reboot or termination of the tmux server ends its sessions.
 
-After upgrading, newly opened terminals use the current hooks and logging protocol. Existing terminals keep their running shell/logger and their prior completion protocol; create a new session to use the output acknowledgement guarantee.
+After upgrading, newly opened terminals use the current hooks and logging protocol. Existing terminals keep their running shell/logger and their prior completion protocol; create a new session to use current independent execution receipts and start/end output markers. Old receipts without a byte boundary are marked incomplete and bounded by available history; upgrading does not manufacture missing output.
 
 Inside a managed shell, use its configured terminal root to manage sessions. For an external terminal, get the resolved path from `config.mjs show`:
 
@@ -179,7 +184,7 @@ node mcp_server/examples/completion-client.mjs --resume /absolute/workspace/outp
 
 Resume only inspects/subscribes/reads the saved task, even when the submission reply was lost. It never submits another command or continues unsubmitted commands from the original argument list. An unconfirmed submission stops with an explicit diagnostic. A crash between writing stdout and saving its cursor may repeat that last output page.
 
-The reusable [client/reconnecting-client.mjs](client/reconnecting-client.mjs) shares one active client and initialization among concurrent readers. On session 404, network loss, timeouts, 429 or retryable 5xx, safe reads retry at most four times with exponential backoff and jitter, honoring `Retry-After`. Finite requests have a 40-second deadline; GET SSE remains open. Existing SDK reconnect handles short SSE interruptions; saved IDs and reconciliation recover completion after a new session/server restart. Authentication, argument/tool errors and `Unknown tool` stop immediately. Command/input/key requests are never replayed automatically: a lost command response raises `SubmissionUncertainError` with the saved selector, because execution may already have started. Only `read()` requests are eligible for automatic retries.
+The reusable [client/reconnecting-client.mjs](client/reconnecting-client.mjs) shares one active client and initialization among concurrent readers. On session 404, network loss, timeouts, 429 or retryable 5xx, safe reads retry at most four times with exponential backoff and jitter, honoring `Retry-After`. Finite requests have a 40-second deadline; GET SSE remains open. Existing SDK reconnect handles short SSE interruptions; saved IDs and reconciliation recover completion after a new session/server restart. Authentication, argument/tool errors and `Unknown tool` stop immediately. A lost command response raises `SubmissionUncertainError` with the saved selector, because execution may already have started. Mutation retries are allowed only after the configured origin explicitly returns its structured `mcp_session_expired` rejection, proving no tool dispatch occurred. Generic gateway 404s and ambiguous failures are never replayed. Safe `read()` calls can retry. Closing the client aborts pending initialization; completion deadlines include network waits.
 
 This helper improves clients that adopt it. A hosted ChatGPT/Codex connector has its own transport and tool registry; origin code cannot repair an upstream `Unknown tool`. Refresh that saved connection and test a new conversation. HTTP 404 responses include recovery guidance, while `http_aborted` audit records identify replies interrupted before completion without recording command text or credentials.
 
@@ -254,6 +259,8 @@ Compression saves network bytes. It does not reduce text after the client decode
 
 Raw logs rotate in 8 MiB segments. By default all segments are retained. `logs.maxSegments` enables retention; `earliestCursor`/`droppedBytes` report removed history. Closed terminal logs are retained for manual archival. HTTP metadata audit is separately capped at eight 8 MiB segments and drops excess queued entries with a counter.
 
+Multiple agents may use independent MCP connections concurrently. Give each agent/task a distinct terminal key. Per-shell locking rejects competing submissions while a command is active; concurrent readers maintain independent cursors. All clients share service-account permissions, so keys are not security isolation. Integration tests exercise six simultaneous clients and recovery across a server restart. A tunnel can impose an additional transport concurrency limit.
+
 Defaults allow 32 live terminals, 32 batch jobs, and 128 HTTP MCP sessions. New batch jobs retain a process-group supervisor until shell output drains, so TERM-to-KILL escalation and explicit deadlines remain effective after the shell exits. Completed batch histories default to 30 days and at most 1000 stored jobs; accepting new batch jobs cleans old completed histories while preserving active ones. Old job records remain readable.
 
 `/healthz` reports version, Git revision, tool profile, and tool count. `/metrics` reports HTTP/session counters. After a service restart the client needs a new MCP initialize handshake; tmux session IDs and job IDs remain valid. A client may need to refresh its connection or start a new conversation to load the updated tool schema.
@@ -269,4 +276,4 @@ node --test mcp_server/test/*.test.mjs
 node mcp_server/scripts/measure_tools.mjs
 ```
 
-Tests cover configuration precedence, relocated workspace/ports, plugin generation, service/relay startup, the two-tool interface, tmux state and prompts, Ctrl+C, output pagination, process deadlines, cancellation, spawn failure, UTF-8, log rotation, absolute paths, chunks, concurrent edits, search cancellation, HTTP errors, authentication, compression negotiation/integrity, and recovery across a server restart. Tests use isolated workspace-local state and remove their own processes and fixtures. Tool footprint measurement reports serialized definition bytes, not model token counts.
+Tests also cover command-history boundaries, unsent versus uncertain dispatch, collector death, retained/missing log gaps, file versions, client cancellation/deadlines, origin-only submission retry, six concurrent clients and independent service definitions. Tests cover configuration precedence, relocated workspace/ports, plugin generation, service/relay startup, the two-tool interface, tmux state and prompts, Ctrl+C, output pagination, process deadlines, cancellation, spawn failure, UTF-8, log rotation, absolute paths, chunks, concurrent edits, search cancellation, HTTP errors, authentication, compression negotiation/integrity, and recovery across a server restart. Tests use isolated workspace-local state and remove their own processes and fixtures. Tool footprint measurement reports serialized definition bytes, not model token counts.

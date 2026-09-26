@@ -44,33 +44,36 @@ ChatGPT 通过隧道或可达的 HTTPS 地址连接正在运行的服务。推�
 ```bash
 node mcp_server/scripts/config.mjs show
 node mcp_server/scripts/config.mjs sync-plugin
-python3 -B mcp_server/scripts/service.py start
-python3 -B mcp_server/scripts/service.py status
-python3 -B mcp_server/scripts/service.py restart
-python3 -B mcp_server/scripts/service.py stop
+python3 -B mcp_server/scripts/services.py prepare
+# 审阅生成的配置，确认系统服务登记符合本机文件路径政策。
+python3 -B mcp_server/scripts/services.py install
+python3 -B mcp_server/scripts/services.py start --component all
+python3 -B mcp_server/scripts/services.py status --component all
 ```
 
-修改客户端地址后执行 `sync-plugin` 生成两份插件配置，并刷新客户端连接。可选 TCP 转发使用 `--component relay` 管理。该脚本管理后台进程；开机启动和故障自动拉起可由系统服务管理器负责。
+修改客户端地址后执行 `sync-plugin` 生成两份插件配置，并刷新客户端连接。可选 TCP 转发使用 `--component relay` 管理。MCP、tmux、Relay 和可选 Tunnel 使用独立 systemd 用户服务，不依赖 botmux。配置、凭据、日志和缓存使用工作区路径。登录退出后的运行、开机启动、旧 tmux 无中断迁移及进程归属检查见[独立服务文档](mcp_server/SERVICES.md)。旧 service.py 在安装后转交 systemd 管理。
 
 ## 使用
 
 建议每次都使用绝对路径，`get_file` 也一样。新会话明确传入绝对 `cwd`；复用会话时使用绝对路径参数或显式 `cd -- /绝对路径`，不要依赖上次留下的目录状态。
 
-第一次调用 `execute_command` 传入 `command`；后续复用返回的 `sessionId`，即可保留 `cd`、环境变量和环境激活状态。
+第一次调用 `execute_command` 前先选择稳定的 `terminalKey`（如 `project/agent/task`），再传入 `command`；后续复用返回的 `sessionId`，即可保留 `cd`、环境变量和环境激活状态。
 
 频繁重连的调用方也可从首次命令起指定固定任务键，例如 `{terminalKey:"project/build-42", command:"pwd", cwd:"/绝对项目路径"}`。后续传同一个 `terminalKey` 即可找回原 tmux，跨 MCP 连接和服务重启保留目录、环境及进程；它与 `sessionId` 二选一，不同任务使用不同键。仅查询时不传 `command`，不会新建终端。忙碌终端拒绝第二条命令，可继续读取或发送交互输入。
 
 返回 `terminalReused` 表明是否复用。终端关闭或闲置回收后，读操作仍读取原历史；只有新命令才可创建替代 shell，并返回 `replacedSessionId`，此时应显式初始化工作目录和环境。每条命令仍需保存原始 `sessionId`、`commandId` 和游标，以便任务键指向新终端后读取旧结果。既不传 `sessionId` 也不传 `terminalKey` 的新命令保持新建终端的行为。
 
 - 执行下一条命令：`{sessionId, command}`。
-- 续读输出：`{sessionId, cursor: 上次的nextCursor}`。
+- 续读输出：`{sessionId, commandId, cursor: 上次的nextCursor}`。
 - 回答交互提示：`{sessionId, input: "yes\n"}`。
 - 中断命令：`{sessionId, key: "C-c"}`。
-- 取回文件：`get_file({path:"result.png"})`；大文件使用 `offset` 和 `nextOffset` 分块。
+- 取回文件：`get_file({path:"result.png"})`；大文件使用 `offset` 和 `nextOffset` 分块，后续请求把首个响应的 `version` 传入 `expectedVersion`；文件变化会报 file_changed，需从稳定产物重新读取。
 
-等待时间和输出上限只限制本次返回，不会终止任务。终端输出会合并 stdout/stderr，可能包含 ANSI 控制符。普通文件编辑、搜索、Git 和进程管理都通过 shell 命令完成。
+等待时间和输出上限只限制本次返回，不会终止任务。默认返回指定命令的输出范围，省略 cursor 时从该命令开头读取；只有显式 outputScope:"terminal" 才读取共享终端流并默认取尾部。历史读取应固定 commandId。检查 outputGap/outputComplete，区分执行成功与输出完整。PTY 合并 stdout/stderr，可能包含 ANSI 和同时运行的后台进程输出；严格按进程区分的结果应写入独立文件。普通文件编辑、搜索、Git 和进程管理都通过 shell 命令完成。
 
 压缩减少网络字节数；解压后的文字仍占模型上下文。控制上下文大小需要限制返回量、用游标续读，以及将大结果保存为文件。
+
+多个 agent 可同时使用独立 MCP 连接；不同任务使用不同 terminalKey，同终端只允许一条活动命令，多读者各自保存游标。已验证 6 个客户端并发及 MCP 重启后的共同恢复。任务键用于协调，不是权限隔离；所有客户端共享服务账号权限。
 
 ## 长任务与会话回收
 
@@ -84,7 +87,7 @@ python3 -B mcp_server/scripts/service.py stop
 
 无在途请求、无 SSE 监听的 MCP 会话默认空闲 2 分钟回收，每 10 秒检查；容量满时优先回收已闲置至少 5 秒的最久未使用会话。并发初始化也占用预留名额，防止超配。回收保留 tmux 任务和结果；客户端收到 404 后重新初始化并按保存的任务 ID 续读即可。流程结束主动 DELETE 释放会话。[连接复用与回收细节](mcp_server/README.md#reuse-connections-and-reclaim-short-lived-sessions)。
 
-提供可复用的重连客户端及完成通知示例：只读请求遇到会话失效或临时网络错误时，合并并发重连、退避重试，恢复订阅与游标续读；通知缺失时每 30 秒核对持久状态。示例在提交前保存任务键，之后保存任务 ID 和游标，支持 `completion-client.mjs --resume <状态文件>`。执行请求丢失响应时不自动重发，避免重复训练。`Unknown tool`、认证或参数错误直接报告。此机制适用于接入该客户端的调用方，托管连接的注册失效仍需在平台刷新连接。
+提供可复用的重连客户端及完成通知示例：只读请求遇到会话失效或临时网络错误时，合并并发重连、退避重试，恢复订阅与游标续读；通知缺失时每 30 秒核对持久状态。示例在提交前保存任务键，之后保存任务 ID 和游标，支持 `completion-client.mjs --resume <状态文件>`。执行请求丢失响应时不自动重发。只有 origin 明确返回 mcp_session_expired、证明尚未派发命令时才可重建连接后重试；普通网关 404 或提交不明仍只读核查。`Unknown tool`、认证或参数错误直接报告。此机制适用于接入该客户端的调用方，托管连接的注册失效仍需在平台刷新连接。
 
 默认每 30 秒检查一次，回收已退出会话及空闲超过 5 分钟的 shell。正在执行命令、有后台子进程、有人连接、手动增加窗口/分屏或标记保留的会话会跳过，日志和文件保留。回收后 shell 的目录和环境变量消失，因此独立操作应明确路径。
 

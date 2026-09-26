@@ -39,7 +39,8 @@ export class CompletionNotifications {
           target.result = state;
           // A call may unsubscribe or the transport may close while reading.
           if (this.closed || this.pending.get(key) !== target || !this.ready()) continue;
-          const data = { event: 'command_completed', notificationId: key,
+          const data = { event: ['unknown', 'submission_uncertain'].includes(state.status) ? 'command_attention_required' : 'command_completed',
+            executionStatus: state.executionStatus ?? state.status, outputStatus: state.outputStatus ?? null, notificationId: key,
             ...(target.jobId ? { jobId: target.jobId, commandId: target.jobId } : { sessionId: target.sessionId, commandId: target.commandId }),
             status: state.status, exitCode: state.exitCode ?? null, signal: state.signal ?? null,
             startedAt: state.startedAt ?? state.createdAt ?? null, finishedAt: state.finishedAt ?? null,
