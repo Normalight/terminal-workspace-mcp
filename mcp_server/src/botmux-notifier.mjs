@@ -1,9 +1,12 @@
 import { spawn } from 'node:child_process';
+import { describeTask, summaryMarkdown } from './task-summary.mjs';
 
 export function completionMessage(record, state) {
   const label = { succeeded: '已完成', failed: '执行失败', terminal_closed: '终端已结束',
     failed_to_start: '启动失败', unknown: '执行状态待核查', submission_uncertain: '提交状态待核查' }[state.executionStatus ?? state.status] ?? '状态待核查';
-  return ['Terminal Workspace 长任务通知', `状态：${label}`,
+  const outputSummary = { complete: '输出收集已结束', incomplete: '输出可能不完整，需检查', pending: '输出仍在收集中' }[state.outputStatus] ?? '输出状态待核查';
+  return ['Terminal Workspace 长任务通知', `任务摘要：${summaryMarkdown(record.taskSummary ?? state.taskSummary ?? describeTask(state.command).taskSummary)}`,
+    `结果摘要：${label}；${outputSummary}。`,
     `退出码：${state.exitCode ?? '未知'}`, `运行时长：${record.durationIsLowerBound ? '至少 ' : ''}${Math.round(record.durationMs / 1000)} 秒`,
     `输出状态：${state.outputStatus ?? '未知'}`, `任务：${record.commandId}`, `终端：${record.terminalId}`,
     '查看结果时使用原任务参数，不重新提交命令：',

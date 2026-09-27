@@ -3,6 +3,7 @@ import { mkdir, readdir, writeFile, link, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { atomicJson, jsonFile } from './runtime.mjs';
 import { sendBotmux, completionMessage } from './botmux-notifier.mjs';
+import { describeTask } from './task-summary.mjs';
 
 const active = state => ['running', 'starting'].includes(state.status);
 const finalDelivery = new Set(['sent', 'skipped', 'failed', 'uncertain']);
@@ -33,7 +34,8 @@ export class BotmuxCompletionWatcher {
         const fresh = { version: 1, terminalId: state.sessionId, commandId: state.commandId,
           target: { sessionId: this.config.sessionId, mentionOpenId: this.config.mentionOpenId },
           minDurationMs: this.config.minDurationMs, status: 'watching', attempts: 0,
-          registeredAt: this.now(), startedAt: state.startedAt ?? state.submittedAt ?? null };
+          registeredAt: this.now(), startedAt: state.startedAt ?? state.submittedAt ?? null,
+          taskSummary: state.taskSummary ?? describeTask(state.command).taskSummary };
         // Atomic create-if-absent: duplicate clients cannot replace a pinned
         // target, a completed delivery, or another process's in-flight send.
         const temporary = `${file}.${randomUUID()}.tmp`;

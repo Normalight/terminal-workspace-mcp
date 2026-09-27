@@ -7,13 +7,29 @@ import { serverFixture } from './http-fixture.mjs';
 import { atomicJson, jsonFile, KeyedMutex, delay } from '../src/runtime.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { BotmuxCompletionWatcher } from '../src/botmux-completion-watcher.mjs';
-import { sendBotmux } from '../src/botmux-notifier.mjs';
+import { sendBotmux, completionMessage } from '../src/botmux-notifier.mjs';
+import { describeTask } from '../src/task-summary.mjs';
 
 const route = '11111111-1111-4111-8111-111111111111';
 const ids = { sessionId: 'term_11111111-1111-4111-8111-111111111111', commandId: 'cmd_22222222-2222-4222-8222-222222222222' };
 const startedAt = '2026-09-27T00:00:00Z', start = Date.parse(startedAt);
 const config = { enabled: true, executable: 'botmux', sessionId: route, mentionOpenId: 'ou_test',
   minDurationMs: 1000, pollIntervalMs: 60000, sendTimeoutMs: 1000, retryDelayMs: 100, maxAttempts: 3 };
+
+test('task summaries normalize caller text and classify omitted descriptions without command arguments', () => {
+  assert.deepEqual(describeTask('private-command', '  数据\n评估\t任务 '), { taskSummary: '数据 评估 任务', taskSummarySource: 'caller' });
+  assert.deepEqual(describeTask('/private/env/bin/python3 /private/task.py --token=SECRET'), { taskSummary: 'Python 程序任务', taskSummarySource: 'command_type' });
+  assert.equal(describeTask('TOKEN=SECRET npm test').taskSummary, '终端后台任务');
+  for (const value of ['', '\x00\t', 123, 'x'.repeat(241)]) assert.throws(() => describeTask('true', value), /taskSummary/);
+});
+
+test('completion summaries distinguish failure and missing output, escape supplied Markdown, and omit logs', () => {
+  const message = completionMessage({ ...ids, terminalId: ids.sessionId, durationMs: 1500, taskSummary: '评估 [模型](private-url)' },
+    { executionStatus: 'failed', exitCode: 2, outputStatus: 'incomplete', command: 'SECRET', output: 'SECRET_LOG' });
+  assert.match(message, /任务摘要：评估 \\\[模型\\\]/);
+  assert.match(message, /结果摘要：执行失败；输出可能不完整/);
+  assert(!message.includes('SECRET')); assert(!message.includes('[模型](private-url)'));
+});
 async function setup() {
   const f = await fixture(), lock = new KeyedMutex(), instances = []; let now = start + 2000, sends = 0;
   const state = { ...ids, status: 'running', executionStatus: 'running', startedAt, command: 'private-command' };
@@ -101,17 +117,24 @@ test('botmux adapter uses explicit route/stdin and classifies missing binaries a
 
 test('MCP registration survives server/client loss and independently delivers once', { timeout: 15000 }, async () => {
   const f = await serverFixture();
-  const exe = path.join(f.root, 'botmux'), delivered = path.join(f.root, 'deliveries');
-  await writeFile(exe, `#!${process.execPath}\nimport {appendFile} from 'node:fs/promises';for await(const chunk of process.stdin){};await appendFile(${JSON.stringify(delivered)},'x');console.log(JSON.stringify({success:true,messageId:'om_integration'}));`, { mode: 0o700 });
+  const exe = path.join(f.root, 'botmux'), delivered = path.join(f.root, 'deliveries'), message = path.join(f.root, 'message');
+  await writeFile(exe, `#!${process.execPath}\nimport {appendFile,writeFile} from 'node:fs/promises';let text='';for await(const chunk of process.stdin)text+=chunk;await writeFile(${JSON.stringify(message)},text);await appendFile(${JSON.stringify(delivered)},'x');console.log(JSON.stringify({success:true,messageId:'om_integration'}));`, { mode: 0o700 });
   Object.assign(f.env, { MCP_BOTMUX_ENABLED: '1', MCP_BOTMUX_SESSION_ID: route, MCP_BOTMUX_EXECUTABLE: exe,
     MCP_SERVICE_ROOT: path.join(f.root, 'runtime'), MCP_BOTMUX_MIN_DURATION_MS: '1000', MCP_BOTMUX_POLL_INTERVAL_MS: '100' });
   try {
     await f.start(); const c = f.client();
-    const a = await c.execute({ terminalKey: 'notify', cwd: f.root, command: 'printf x >> once; while [ ! -f release ]; do sleep .05; done', waitMs: 0 });
+    const a = await c.execute({ terminalKey: 'notify', cwd: f.root, command: 'printf x >> once; while [ ! -f release ]; do sleep .05; done', taskSummary: '验证断线后任务只执行一次', waitMs: 0 });
+    assert.equal(a.taskSummary, '验证断线后任务只执行一次');
     assert.equal(a.externalNotification.status, 'watching'); await c.close(); await f.stop();
     await delay(1100); await writeFile(path.join(f.root, 'release'), ''); await f.start();
     for (let i = 0; i < 100 && await readFile(delivered, 'utf8').catch(() => '') !== 'x'; i++) await delay(50);
     assert.equal(await readFile(delivered, 'utf8'), 'x'); await f.stop(); await f.start(); await delay(250);
     assert.equal(await readFile(delivered, 'utf8'), 'x'); assert.equal(await readFile(path.join(f.root, 'once'), 'utf8'), 'x');
+    const summary = await readFile(message, 'utf8'); assert.match(summary, /任务摘要：验证断线后任务只执行一次/);
+    assert.match(summary, /结果摘要：已完成；输出收集已结束/); assert(!summary.includes('printf'));
+    const resumed = f.client(), saved = await resumed.read({ sessionId: a.sessionId, commandId: a.commandId, statusOnly: true, waitMs: 0 });
+    assert.equal(saved.taskSummary, a.taskSummary); assert.equal(saved.taskSummarySource, 'caller');
+    await assert.rejects(resumed.read({ sessionId: a.sessionId, commandId: a.commandId, taskSummary: 'changed', waitMs: 0 }), /submission/);
+    await resumed.close();
   } finally { await f.cleanup(); }
 });

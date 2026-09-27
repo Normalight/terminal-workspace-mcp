@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.7
+
+- Persist optional submission-only `taskSummary` text and include purpose/result summaries in long-task completion notices, including after client/server restarts.
+- Use coarse command-type descriptions when no summary was supplied, escape display markup, and keep command arguments and raw logs out of automatic summaries.
+- Document fixed botmux session routing, which selects both the sending bot and notification destination.
+
 ## 0.5.6
 
 - Add opt-in persistent completion watches with an explicit botmux session destination and long-task threshold; command execution remains independent of botmux availability.

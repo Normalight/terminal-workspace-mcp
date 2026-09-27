@@ -102,6 +102,8 @@ node mcp_server/scripts/measure_tools.mjs
 
 Tests use isolated directories and local ports. GitHub Actions runs the suite on Linux with Node.js 22 and 24. Contributions and reproducible bug reports are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+Long submissions may include `taskSummary` (1–240 characters). Completion notices preserve this purpose across restarts and summarize execution/output state; omitted descriptions use a coarse task category. The botmux `sessionId` selects both the sending bot and its chat/thread destination.
+
 ## License
 
 [MIT](LICENSE). Dependencies retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Changes are recorded in [CHANGELOG.md](CHANGELOG.md).

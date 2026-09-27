@@ -2,7 +2,7 @@
 
 [Public repository](https://github.com/Normalight/terminal-workspace-mcp) · [MIT license](LICENSE) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
-A personal remote terminal for the account running the server. Release 0.5.6 exposes two tools by default:
+A personal remote terminal for the account running the server. Release 0.5.7 exposes two tools by default:
 
 - `execute_command`: shell commands, persistent tmux sessions, interactive input, and output polling.
 - `get_file`: original files and images, with resumable chunks for large files.
@@ -360,12 +360,20 @@ Configure this in the private `config.local.json` overlay:
 }
 ```
 
-Use a real authorized botmux session and recipient; empty `mentionOpenId` explicitly sends without mentioning anyone. A supervised process needs an executable reachable through its configured path and a botmux installation that permits that fixed route. No agent credentials or turn identity are copied into the service. Environment overrides are `MCP_BOTMUX_ENABLED`, `MCP_BOTMUX_EXECUTABLE`, `MCP_BOTMUX_SESSION_ID`, `MCP_BOTMUX_MENTION_OPEN_ID`, `MCP_BOTMUX_MIN_DURATION_MS`, `MCP_BOTMUX_POLL_INTERVAL_MS`, `MCP_BOTMUX_SEND_TIMEOUT_MS`, `MCP_BOTMUX_RETRY_DELAY_MS`, and `MCP_BOTMUX_MAX_ATTEMPTS`. Supervised deployment uses the configuration overlay; restart the server to apply changes.
+The botmux `sessionId` selects both the sending bot identity and its chat/thread destination; it is unrelated to a terminal `sessionId`. To use a particular bot, choose an existing authorized session belonging to that bot. Use a real authorized botmux session and recipient; empty `mentionOpenId` explicitly sends without mentioning anyone. A supervised process needs an executable reachable through its configured path and a botmux installation that permits that fixed route. No agent credentials or turn identity are copied into the service. Environment overrides are `MCP_BOTMUX_ENABLED`, `MCP_BOTMUX_EXECUTABLE`, `MCP_BOTMUX_SESSION_ID`, `MCP_BOTMUX_MENTION_OPEN_ID`, `MCP_BOTMUX_MIN_DURATION_MS`, `MCP_BOTMUX_POLL_INTERVAL_MS`, `MCP_BOTMUX_SEND_TIMEOUT_MS`, `MCP_BOTMUX_RETRY_DELAY_MS`, and `MCP_BOTMUX_MAX_ATTEMPTS`. Supervised deployment uses the configuration overlay; restart the server to apply changes.
 
 Running tracked terminal calls register once and return `externalNotification` with the provider, registration/delivery state and threshold. The watcher sends for success, failure, or attention states that meet the duration threshold. Short completed tasks and previously completed history are not backfilled. The threshold uses the actual start/finish times, so downtime cannot turn a short command into a long one. If the finish timestamp is unavailable, a previously observed long running interval can establish a lower bound; otherwise duration stays uncertain and no completion is invented.
 
 Records live under `paths.service/botmux-notifications`. Each record pins its original destination and threshold. Clients/restarts do not replace them; config changes apply to new registrations. Disable the integration to suspend all checks/sends, retaining records for a later re-enable. Completed records remain as deduplication tombstones. `/healthz.backgroundNotifications` reports record counts and a safe last error code. `failed` and `uncertain` need operator inspection; this release does not automatically resend uncertain records.
 
-Reported CLI failures use bounded backoff; missing binaries do not stop commands. A send in progress during a crash, a timeout, or an absent success receipt is marked uncertain rather than blindly replayed. This cannot guarantee exactly-once delivery across external transport failures. Messages contain status, exit code, runtime, output status and saved task IDs, without command text or terminal output. Use the IDs to retrieve artifacts; notifications do not wake a ChatGPT turn. The watcher resumes only when the MCP service is running. Its file lock also coordinates multiple local MCP processes sharing a notification directory.
+Reported CLI failures use bounded backoff; missing binaries do not stop commands. A send in progress during a crash, a timeout, or an absent success receipt is marked uncertain rather than blindly replayed. This cannot guarantee exactly-once delivery across external transport failures. Messages contain a task-purpose summary, an execution/output-state result summary, exit code, runtime and saved task IDs. They do not copy command arguments or terminal output. The result summary describes observed process state, not a semantic analysis of logs. Use the IDs to retrieve artifacts; notifications do not wake a ChatGPT turn. The watcher resumes only when the MCP service is running. Its file lock also coordinates multiple local MCP processes sharing a notification directory.
 
 Tests disable notification routing by default; integration tests explicitly use isolated fake botmux executables.
+
+Supply an optional `taskSummary` (1–240 characters) when submitting long work, for example:
+
+```json
+{"terminalKey":"project/evaluation","command":"python evaluate.py","taskSummary":"Evaluate the validation dataset and save metrics","estimatedDurationMs":600000,"waitMs":0}
+```
+
+Write a brief non-sensitive purpose: it will be sent verbatim as escaped plain text to the configured destination. Newlines/control characters become spaces. The summary is saved with the command and returned by status-only reads; later polling cannot replace it. When omitted, the service provides a coarse category such as a Python task, without copying paths, arguments or environment variables. It does not invoke a model to summarize raw output.

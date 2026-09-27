@@ -3,6 +3,7 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { atomicJson, atomicWrite, delay, integer, jsonFile, OperationError, processIdentity, quote } from './runtime.mjs';
 import { readLog } from './log-store.mjs';
+import { describeTask } from './task-summary.mjs';
 import { activeStatus, blocksSubmission, readCommandOutput } from './terminal-output.mjs';
 import { checkSubmission } from './server-lifecycle.mjs';
 
@@ -27,10 +28,11 @@ export async function collectorState(manager, session, pane) {
   return { alive: !!pane.pipeActive, status: 'legacy' };
 }
 
-export async function submitCommand(manager, id, { command, waitMs = 1000, maxBytes = 65536, signal, estimatedDurationMs } = {}) {
+export async function submitCommand(manager, id, { command, waitMs = 1000, maxBytes = 65536, signal, estimatedDurationMs, taskSummary } = {}) {
   if (typeof command !== 'string' || !command.trim() || command.length > 20000) throw new OperationError('command must be 1..20000 characters', 'invalid_input');
   integer(waitMs, 'waitMs', 0, 30000);
   if (estimatedDurationMs !== undefined) integer(estimatedDurationMs, 'estimatedDurationMs', 1, 2147483647);
+  const description = describeTask(command, taskSummary);
   const commandId = await manager.locked(id, async () => {
     checkSubmission(signal);
     const state = await manager.status(id);
@@ -52,7 +54,7 @@ export async function submitCommand(manager, id, { command, waitMs = 1000, maxBy
     checkSubmission(signal);
     const meta = { commandId: cid, sessionId: id, command, cwd: state.cwd, submittedAt: new Date().toISOString(),
       startedAt: null, startCursor: tail.endCursor, submissionProtocol: 1,
-      ...(estimatedDurationMs !== undefined ? { estimatedDurationMs } : {}) };
+      ...(estimatedDurationMs !== undefined ? { estimatedDurationMs } : {}), ...description };
     await atomicWrite(base + '.sh', command + '\n');
     await atomicJson(base + '.json', meta);
     await atomicJson(base + '.delivery.json', { phase: 'prepared' });

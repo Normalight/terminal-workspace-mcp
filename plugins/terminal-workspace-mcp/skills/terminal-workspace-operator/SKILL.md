@@ -62,3 +62,5 @@ For defer, save monitoring.resume and show monitoring.checkAfterMs/checkAfterAt 
 
 
 If externalNotification reports provider=botmux and registered=true, a durable server-side watcher will notify the configured destination for tasks meeting minDurationMs. Keep the same task IDs and follow defer normally; do not start another watcher or promise a ChatGPT turn will resume automatically. failed/uncertain mean notification delivery needs inspection, not task failure or permission to replay the command. Disabled deployments retain the existing manual/scheduler follow-up behavior.
+
+For long command submissions, supply a brief `taskSummary` (1–240 characters) stating the purpose without secrets. It persists with the task and may be sent to the configured external notification destination. Completion messages add execution/output state; they do not analyze raw logs. Omit `taskSummary` when resuming or polling.

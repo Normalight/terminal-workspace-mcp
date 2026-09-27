@@ -139,3 +139,5 @@ HTTP 单次主动等待默认最多 5 秒，即使旧对话仍传入 30 秒，�
 
 
 可选的 `notifications.botmux` 集成默认关闭。启用并指定接收会话、@ 对象后，后台持久化监听默认超过 5 分钟的任务，完成或失败时调用 botmux 发送状态通知；不需要 ChatGPT 持续轮询。阈值、检查周期和发送重试均可配置。服务重启后恢复监听，重复查询不会重复登记；发送结果不明时保留待核查记录。终端服务仍独立运行，botmux 不可用不会中止命令。配置与边界见[通知配置](mcp_server/README.md#optional-botmux-completion-notifications)。
+
+提交长任务时可传 `taskSummary`（1–240 字符）描述用途，完成通知会带上任务摘要、执行结果和输出收集状态。摘要随任务保存，断线和重启后仍可恢复；不传时使用粗略任务类型。`notifications.botmux.sessionId` 决定发送机器人及其群/话题落点。
