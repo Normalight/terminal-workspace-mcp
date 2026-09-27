@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { LocalCommandExecutor } from "../src/local-executor.mjs";
 import { JobManager } from "../src/job-manager.mjs";
 import { fixture } from "./helpers.mjs";
@@ -10,8 +10,13 @@ import { delay, processIdentity } from "../src/runtime.mjs";
 test('output pagination and wait limits keep execution alive with raw complete logs',async()=>{
  const f=await fixture();const jobs=await new JobManager({root:path.join(f.root,'jobs'),shell:f.shell}).initialize();
  try{const exec=new LocalCommandExecutor({jobManager:jobs});
- const r=await exec.execute({command:"printf 'token=fixture-value\\n'; printf '%04096d' 0; sleep .3; printf 'done' > done",cwd:f.root,env:f.env,waitMs:50,maxOutputBytes:1024});
- assert(r.waitingExpired);assert.equal(r.signal,null);assert.match(r.stdout,/token=fixture-value/);
+ const r=await exec.execute({command:"printf 'token=fixture-value\\n'; printf '%04096d' 0; while [ ! -f release ]; do sleep .02; done; printf 'done' > done",cwd:f.root,env:f.env,waitMs:50,maxOutputBytes:1024});
+ assert(r.waitingExpired);assert.equal(r.signal,null);assert(Buffer.byteLength(r.stdout)<=1024);
+ // A short wait may expire before the worker is scheduled. Wait for actual
+ // output before checking pagination, with execution gated independently.
+ let page;for(let i=0;i<150;i++){page=await jobs.logs(r.jobId,{stdoutCursor:0,maxBytes:1024});if(page.stdout.length===1024)break;await delay(20);}
+ assert.match(page.stdout,/token=fixture-value/);assert.equal(page.stdout.length,1024);assert(page.stdoutPage.truncated);
+ await writeFile(path.join(f.root,'release'),'');
  const state=await jobs.wait(r.jobId,3000);assert.equal(state.status,'succeeded');assert.equal(await readFile(path.join(f.root,'done'),'utf8'),'done');
  const logs=await jobs.logs(r.jobId,{stdoutCursor:0,maxBytes:8192});assert.equal(logs.stdout.length,4116);assert(!logs.stdoutPage.truncated);
  }finally{for(const j of await jobs.list())await jobs.stop(j.jobId,{force:true});await f.cleanup();}

@@ -61,7 +61,7 @@ const terminalGcTimer = setInterval(async () => {
 terminalGcTimer.unref();
 let revision = "unknown";
 try { revision = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8", timeout: 2000 }).trim(); } catch {}
-const version = "0.5.1";
+const version = "0.5.2";
 const maxSessions = settings.http.sessions.max;
 let toolCount = 0;
 const startedAt = Date.now();

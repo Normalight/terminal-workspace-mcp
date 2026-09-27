@@ -13,7 +13,9 @@ const commandId = string.regex(/^cmd_[a-f0-9-]{36}$/);
 const sessionId = string.regex(/^term_[a-f0-9-]{36}$/);
 export function result(value, summary) {
   const serialized = JSON.stringify(value);
-  return { structuredContent: value, content: [{ type: "text", text: summary ?? (Buffer.byteLength(serialized) < 4096 ? serialized : `Result available in structuredContent (${Buffer.byteLength(serialized)} bytes).`) }] };
+  // Some hosts consume only TextContent. Always preserve the bounded result,
+  // including completion status and cursors, in that representation too.
+  return { structuredContent: value, content: [{ type: "text", text: summary ?? serialized }] };
 }
 export function errorResult(error) {
   const code = typeof error?.code === "string" ? error.code : "operation_failed";

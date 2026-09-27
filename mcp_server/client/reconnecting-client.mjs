@@ -138,6 +138,13 @@ export class ReconnectingTerminalClient {
     for (;;) {
       const state = await this.read({ ...args, waitMs: 0, notifyOnCompletion: true }, { signal });
       if (state.status !== 'running' && state.status !== 'starting') { this.events.delete(key); return state; }
+      if (state.interaction?.type === 'pager') {
+        this.events.delete(key);
+        const error = new Error('Foreground pager needs input; inspect the task and dismiss the pager instead of polling.');
+        error.code = 'interaction_required'; error.state = state;
+        error.recovery = { sessionId: state.sessionId, commandId: state.commandId, cursor: state.nextCursor, waitMs: 0 };
+        throw error;
+      }
       if (state.serverRestarting) { await sleep(1000, undefined, { signal }); continue; }
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw Error('Completion wait expired; retain IDs/cursor and resume without command.');
@@ -146,7 +153,8 @@ export class ReconnectingTerminalClient {
       await new Promise(resolve => {
         let timer;
         const done = () => { clearTimeout(timer); this.waiters.delete(done); resolve(); };
-        this.waiters.add(done); timer = setTimeout(done, Math.min(this.reconcileMs, remaining));
+        const interval = state.completionNotification?.listening === false ? Math.min(this.reconcileMs, 1000) : this.reconcileMs;
+        this.waiters.add(done); timer = setTimeout(done, Math.min(interval, remaining));
         if (this.events.has(key) || signal.aborted) done();
       });
     }

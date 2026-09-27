@@ -112,7 +112,7 @@ export class TerminalManager {
       if (bindingFile) await atomicJson(bindingFile, { terminalKey, sessionId: id });
       await atomicWrite(rc, shellRc({ directory: dir, ready, token: logToken }));
       const environmentFile = path.join(dir, 'environment.sh');
-      await atomicWrite(environmentFile, environmentScript({ ...this.env, ...env, HISTFILE: path.join(dir, "history"), MCP_TERMINAL_ROOT: this.root, MCP_TERMINAL_ADMIN: fileURLToPath(new URL("../scripts/terminals.mjs", import.meta.url)) }));
+      await atomicWrite(environmentFile, environmentScript({ ...this.env, PAGER: 'cat', GIT_PAGER: 'cat', SYSTEMD_PAGER: 'cat', ...env, HISTFILE: path.join(dir, "history"), MCP_TERMINAL_ROOT: this.root, MCP_TERMINAL_ADMIN: fileURLToPath(new URL("../scripts/terminals.mjs", import.meta.url)) }));
       // wait-for gates shell startup so pipe-pane is installed before any output.
       const gate = `gate_${randomUUID()}`;
       const launch = `${quote(this.tmux)} -S ${quote(this.socket)} wait-for ${quote(gate)}; exec ${isolatedLaunch(environmentFile, ['/bin/bash', '--noprofile', '--rcfile', rc, '-i'])}`;

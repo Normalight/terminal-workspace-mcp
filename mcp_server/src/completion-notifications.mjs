@@ -24,6 +24,7 @@ export class CompletionNotifications {
     return { ...state, completionNotification: {
       method: 'notifications/message', logger: 'terminal-workspace.completion',
       subscribed: this.pending.has(key), listening: this.ready(), sent: this.sent.has(key),
+      ...(!this.ready() && active ? { fallback: 'poll', reason: 'no_listener', pollAfterMs: 1000 } : {}),
     } };
   }
 

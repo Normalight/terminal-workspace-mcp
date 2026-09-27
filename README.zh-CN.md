@@ -89,7 +89,7 @@ python3 -B mcp_server/scripts/services.py status --component all
 
 无在途请求、无 SSE 监听的 MCP 会话默认空闲 2 分钟回收，每 10 秒检查；容量满时优先回收已闲置至少 5 秒的最久未使用会话。并发初始化也占用预留名额，防止超配。回收保留 tmux 任务和结果；客户端收到 404 后重新初始化并按保存的任务 ID 续读即可。流程结束主动 DELETE 释放会话。[连接复用与回收细节](mcp_server/README.md#reuse-connections-and-reclaim-short-lived-sessions)。
 
-提供可复用的重连客户端及完成通知示例：只读请求遇到会话失效或临时网络错误时，合并并发重连、退避重试，恢复订阅与游标续读；通知缺失时每 30 秒核对持久状态。示例在提交前保存任务键，之后保存任务 ID 和游标，支持 `completion-client.mjs --resume <状态文件>`。执行请求丢失响应时不自动重发。只有 origin 明确返回 mcp_session_expired、证明尚未派发命令时才可重建连接后重试；普通网关 404 或提交不明仍只读核查。`Unknown tool`、认证或参数错误直接报告。此机制适用于接入该客户端的调用方，托管连接的注册失效仍需在平台刷新连接。
+提供可复用的重连客户端及完成通知示例：只读请求遇到会话失效或临时网络错误时，合并并发重连、退避重试，恢复订阅与游标续读；有监听时每 30 秒核对持久状态，没有通知监听时每秒核对。示例在提交前保存任务键，之后保存任务 ID 和游标，支持 `completion-client.mjs --resume <状态文件>`。执行请求丢失响应时不自动重发。只有 origin 明确返回 mcp_session_expired、证明尚未派发命令时才可重建连接后重试；普通网关 404 或提交不明仍只读核查。`Unknown tool`、认证或参数错误直接报告。此机制适用于接入该客户端的调用方，托管连接的注册失效仍需在平台刷新连接。
 
 默认每 30 秒检查一次，回收已退出会话及空闲超过 5 分钟的 shell。正在执行命令、有后台子进程、有人连接、手动增加窗口/分屏或标记保留的会话会跳过，日志和文件保留。回收后 shell 的目录和环境变量消失，因此独立操作应明确路径。
 
@@ -111,3 +111,9 @@ node mcp_server/scripts/measure_tools.mjs
 ```
 
 详细行为和限制见[操作文档](mcp_server/README.md)。欢迎提交可复现问题和 PR，流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。代码使用 [MIT 许可证](LICENSE)。
+
+### 完成状态与分页器
+
+工具返回明确的 `nextAction`：`poll` 等待运行中的任务，`read_output` 读取剩余页，`input` 处理前台分页器，`inspect` 核查不明执行或输出缺口，`done` 停止轮询。任务终态与输出完整性分别判断；缺失输出不会通过重复轮询自动恢复。超过 4 KiB 的结果也会在文本区保留完整的有界 JSON（含状态、退出码、游标和输出），兼容只读取文本的客户端。
+
+新终端默认 `PAGER/GIT_PAGER/SYSTEMD_PAGER=cat`。旧终端保留原环境，应使用 `git --no-pager`；若检测到前台分页器，会返回 `interaction`，读完后显式发送 `input:"q"`。SDK 等待助手会抛出带原任务状态的 `interaction_required`，不继续空等。完成通知仍要求客户端实际保持监听；`listening:false` 会同时明确返回轮询兜底。

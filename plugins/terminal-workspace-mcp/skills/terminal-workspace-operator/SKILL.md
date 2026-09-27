@@ -23,7 +23,7 @@ While `status` is `starting` or `running`, poll without `command`:
 {"sessionId":"term_...","commandId":"cmd_...","cursor":1234,"waitMs":10000,"maxBytes":65536}
 ```
 
-Use the previous `nextCursor`, increasing waits up to 30000 ms for sparse output. Read all remaining pages after execution ends. Check `status`, `exitCode`, `outputGap` and `outputComplete` before reporting success and complete output. Consume `structuredContent` for full pages.
+Use the previous `nextCursor`. Follow `nextAction`: `poll` for active work, `read_output` for remaining pages, `input` for a foreground pager, `inspect` for uncertainty or missing output, and `done` to stop polling. A final status ends execution; drain remaining pages and report gaps, which do not disappear by polling. Check `status`, `exitCode`, `outputGap` and `outputComplete` before reporting success and complete output. TextContent and structuredContent both carry the full bounded result.
 
 During a planned update, `serverRestarting:true` returns the current task state early. Reconnect/reinitialize and continue reading the saved IDs; the task keeps running. A lost reply, expired wait or reconnect is never permission to resubmit. If the first reply is lost, inspect the saved key without `command`. For `submission_uncertain` or `unknown`, inspect the saved command and its side effects; do not automatically replay. `submission_failed` provides a recovery selector and indicates failure before dispatch. HTTP `MCP-Session-Id` is a transport identifier, separate from the terminal's `sessionId`; an expired HTTP session needs fresh initialization, then reads of the saved task.
 
@@ -38,6 +38,8 @@ PTY output merges stdout/stderr (`stderr` is empty). It may include ANSI, intera
 `cwd` applies only on creation; use `cd -- /absolute/path` in an existing shell. Closed/reclaimed keys can return a replacement shell on a new command; initialize its cwd/environment again. Keep the original `sessionId` to read its old history. tmux tasks survive MCP restarts, but do not survive machine reboot or termination of their tmux server.
 
 Answer prompts using `{sessionId,input:"yes\n"}` or interrupt using `{sessionId,key:"C-c"}`. Send commands and interactive input in separate calls. Preserve `PROMPT_COMMAND`, the `DEBUG` trap and internal tracking variables. Long work should stay in the foreground; a command ending in `&` completes when its shell returns.
+
+New terminals disable automatic pagers. Existing shells may still launch one: prefer `git --no-pager` for status queries. When `interaction.type` is `pager`, inspect the output and deliberately send `{sessionId,input:"q"}` to leave it when finished reading. Polling cannot dismiss a pager; do not confuse it with a completed command or retry the command.
 
 ## Manage resources and files
 

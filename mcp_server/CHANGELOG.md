@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.2 — 2026-09-27
+
+- Preserve full bounded results in TextContent as well as structuredContent, including final status and cursors for replies above 4 KiB.
+- Return an explicit nextAction for polling, reading remaining output, interactive input, inspection or stopping. Missing output does not require endless polling.
+- Disable automatic pagers in new shells and detect foreground pagers, including Git child processes. Existing shells keep their environments; interactive pagers require deliberate input.
+- Expose polling fallback when no notification stream exists. SDK completion waits reconcile every second in that case and report interaction_required for pagers.
+
 ## 0.5.1 — 2026-09-26
 
 - Drain finite MCP responses before a planned restart; return running task IDs/cursors with `serverRestarting:true` while leaving execution alive.

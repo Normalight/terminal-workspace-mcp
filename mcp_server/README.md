@@ -2,7 +2,7 @@
 
 [Public repository](https://github.com/Normalight/terminal-workspace-mcp) · [MIT license](LICENSE) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
-A personal remote terminal for the account running the server. Release 0.5.1 exposes two tools by default:
+A personal remote terminal for the account running the server. Release 0.5.2 exposes two tools by default:
 
 - `execute_command`: shell commands, persistent tmux sessions, interactive input, and output polling.
 - `get_file`: original files and images, with resumable chunks for large files.
@@ -169,6 +169,12 @@ The notification carries status and identifiers; retrieve output using `execute_
 - **Delivery limits:** subscriptions belong to a connection, not a broadcast channel. A connection retains up to 256 pending subscriptions and a 2,048-entry sent-ID deduplication window; capacity failures explicitly return `completionNotification.reason: "subscription_limit"` and `fallback: "poll"`. Network receipt is not acknowledged, so clients should deduplicate `notificationId` and reconcile saved IDs after reconnecting. Server restart discards subscriptions, not task results. Logging thresholds above `notice` defer delivery until the client allows it.
 - **Server lifecycle:** a demand-started monitor checks subscribed commands about every 500 ms while a listener exists. Terminal completion uses the persisted output-drain acknowledgement. Completed states are cached during retries. The monitor stops when empty or when the MCP session closes; active SSE listeners are protected from idle session GC. SSE is uncompressed, with SDK keep-alives and proxy-buffering disabled. No commands or output are included in notification payloads.
 - **Fallback:** a client must handle events to act on them. Receiving a notification does not itself wake an offline application or schedule another model turn. If the host does not expose notification handlers, continue polling with `{sessionId, cursor: nextCursor, waitMs: 10000}` (up to 30000 ms). Waiting expiry, output truncation and a dropped connection do not stop execution. Always verify the final status/exit code and read remaining output before reporting completion.
+
+Every terminal reply includes `nextAction`: `poll` for active work, `read_output` for another page, `input` for a detected foreground pager, `inspect` for uncertain execution or missing output, and `done` to stop polling. Preserve `commandId` as well as `sessionId` and `nextCursor` for subsequent reads. A final execution status with an output gap requires reporting that gap, not waiting for it to disappear. Text-only clients receive the same bounded JSON result, including status and output, as `structuredContent` even above 4 KiB.
+
+New shells default `PAGER`, `GIT_PAGER` and `SYSTEMD_PAGER` to `cat`; explicit per-shell environment overrides remain supported. Existing shells retain their environment, so use `git --no-pager` for status queries there. If a command explicitly starts `less` or another detected pager, `interaction` explains that it is waiting for input. Read what is needed, then send `input:"q"` deliberately. A still-open pager means the command has not finished. The SDK completion helper reports `interaction_required` with saved state instead of waiting forever.
+
+When a running reply reports `completionNotification.listening:false`, it also provides `fallback:"poll"` and `reason:"no_listener"`. A subscription alone cannot deliver a notification. The SDK helper reconciles every second without a listener; with a listener its normal bounded reconciliation remains active.
 
 A runnable SDK example is [examples/completion-client.mjs](examples/completion-client.mjs). It listens for pushed completion, reconciles persisted task status every 30 seconds if no event arrives, and fetches remaining output:
 
