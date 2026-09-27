@@ -38,7 +38,13 @@
       "pollIntervalMs": 5000,
       "sendTimeoutMs": 15000,
       "retryDelayMs": 30000,
-      "maxAttempts": 5
+      "maxAttempts": 5,
+      "mode": "completion",
+      "botAppId": "",
+      "chatId": "",
+      "progressIntervalMs": 300000,
+      "taskTimeoutMs": 120000,
+      "eventTimeoutMs": 120000
     }
   },
   "files": {

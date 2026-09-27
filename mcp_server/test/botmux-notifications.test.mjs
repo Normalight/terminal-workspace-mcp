@@ -48,7 +48,7 @@ test('botmux is optional and enabling requires an explicit session route', async
   const f = await setup();
   try {
     assert.equal(loadConfig({ env: { MCP_BOTMUX_ENABLED: '0' } }).config.notifications.botmux.enabled, false);
-    assert.throws(() => loadConfig({ env: { MCP_BOTMUX_ENABLED: '1', MCP_BOTMUX_SESSION_ID: '' } }), /sessionId/);
+    assert.throws(() => loadConfig({ env: { MCP_BOTMUX_MODE: 'completion', MCP_BOTMUX_ENABLED: '1', MCP_BOTMUX_SESSION_ID: '' } }), /sessionId/);
     const w = await f.watcher({ enabled: false });
     assert.equal(await w.observe(f.state), f.state); await w.tick(); assert.equal(f.sends, 0);
     await assert.rejects(readdir(w.root), e => e.code === 'ENOENT');
@@ -119,7 +119,7 @@ test('MCP registration survives server/client loss and independently delivers on
   const f = await serverFixture();
   const exe = path.join(f.root, 'botmux'), delivered = path.join(f.root, 'deliveries'), message = path.join(f.root, 'message');
   await writeFile(exe, `#!${process.execPath}\nimport {appendFile,writeFile} from 'node:fs/promises';let text='';for await(const chunk of process.stdin)text+=chunk;await writeFile(${JSON.stringify(message)},text);await appendFile(${JSON.stringify(delivered)},'x');console.log(JSON.stringify({success:true,messageId:'om_integration'}));`, { mode: 0o700 });
-  Object.assign(f.env, { MCP_BOTMUX_ENABLED: '1', MCP_BOTMUX_SESSION_ID: route, MCP_BOTMUX_EXECUTABLE: exe,
+  Object.assign(f.env, { MCP_BOTMUX_MODE: 'completion', MCP_BOTMUX_ENABLED: '1', MCP_BOTMUX_SESSION_ID: route, MCP_BOTMUX_EXECUTABLE: exe,
     MCP_SERVICE_ROOT: path.join(f.root, 'runtime'), MCP_BOTMUX_MIN_DURATION_MS: '1000', MCP_BOTMUX_POLL_INTERVAL_MS: '100' });
   try {
     await f.start(); const c = f.client();

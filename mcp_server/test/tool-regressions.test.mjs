@@ -47,9 +47,15 @@ test('poll includes final output when completion arrives after its initial read'
     assert.equal(final.status, 'succeeded'); assert.equal(final.outputTruncated, false);
     assert.match(initial.stdout + final.stdout, /FIRSTLAST/);
     assert.equal(final.nextCursor, final.outputEndCursor);
-    const exited = await call({ sessionId: initial.sessionId, command: 'printf BEFORE_EXIT; exit 3', waitMs: 2000 });
+    let exited = await call({ sessionId: initial.sessionId, command: 'printf BEFORE_EXIT; exit 3', waitMs: 2000 });
+    let exitOutput = exited.stdout;
+    const deadline = Date.now() + 10000;
+    while (['running', 'starting'].includes(exited.status) && Date.now() < deadline) {
+      exited = await call({ sessionId: initial.sessionId, commandId: exited.commandId, cursor: exited.nextCursor, waitMs: 500 });
+      exitOutput += exited.stdout;
+    }
     assert.equal(exited.status, 'terminal_closed'); assert.equal(exited.exitCode, 3);
-    assert.match(exited.stdout, /BEFORE_EXIT/);
+    assert.match(exitOutput, /BEFORE_EXIT/);
   } finally { if (id) await t.close(id); await t.run(['kill-server']).catch(() => {}); await f.cleanup(); }
 });
 

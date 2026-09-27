@@ -144,6 +144,6 @@ HTTP 单次主动等待默认最多 5 秒，即使旧对话仍传入 30 秒，�
 有依据时可在提交命令时传 `estimatedDurationMs`，用于保留调用方的总耗时估计；超过前台预算的估计会立即建议 defer。没有估计或已超出估计时，`estimatedRemainingMs=null`，不得编造 ETA。预算可用 `terminal.foregroundBudgetMs` 配置。SDK 新增 `monitorUntilYield` 返回运行中的任务和续读参数；`waitForCompletion` 保留明确持续监控的行为。长任务完整日志建议写入持久文件，暂停读取期间仍受日志保留策略限制。
 
 
-可选的 `notifications.botmux` 集成默认关闭。启用并指定接收会话、@ 对象后，后台持久化监听默认超过 5 分钟的任务，完成或失败时调用 botmux 发送状态通知；不需要 ChatGPT 持续轮询。阈值、检查周期和发送重试均可配置。服务重启后恢复监听，重复查询不会重复登记；发送结果不明时保留待核查记录。终端服务仍独立运行，botmux 不可用不会中止命令。配置与边界见[通知配置](mcp_server/README.md#optional-botmux-completion-notifications)。
+可选的 `notifications.botmux` 默认关闭。设置 `mode: "task"`、`botAppId`、`chatId` 和 `mentionOpenId` 后，达到阈值的长任务会交给指定机器人，在目标群新建专属话题；开场 @ 用户、定期同步进度，完成或失败再 @ 用户。调用方预计耗时达到阈值时可提前交接。服务持久化任务、话题和待处理事件，重启继续原监听；机器人摘要超时则直接同步实测状态。配置示例与重试边界见[长任务监听配置](mcp_server/README.md#optional-botmux-task-monitoring)。终端执行仍独立于 botmux。
 
-提交长任务时可传 `taskSummary`（1–240 字符）描述用途，完成通知会带上任务摘要、执行结果和输出收集状态。摘要随任务保存，断线和重启后仍可恢复；不传时使用粗略任务类型。`notifications.botmux.sessionId` 决定发送机器人及其群/话题落点。
+提交时可传 `taskSummary`（1–240 字符）描述用途。消息包含用途、执行和输出状态、运行时间及任务 ID，使用纯文本自然段，不转发命令参数和终端原始输出。`progressIntervalMs` 默认 5 分钟；`mode: "completion"` 兼容固定 `sessionId` 的完成通知。

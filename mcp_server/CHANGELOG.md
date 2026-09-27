@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.9
+
+- Delegate long tasks to an optional botmux agent in a dedicated new topic, with periodic state summaries and explicit recipient mentions on start and completion. Persist task/topic/event routing across restarts.
+- Send plain, consistently formatted messages through explicit bot identity; bound agent deadlines fall back to observed task state.
+- Retain fixed-session completion mode for existing configurations. Document both modes and their retry boundaries.
+- Verify retained exit receipts after tmux pipe draining and wait for final state in CI regressions instead of assuming a fixed two-second completion.
+
 ## 0.5.8
 
 - Drain completed terminals on tmux versions that reject closing an exited pane pipe. Persist the exit receipt before retiring that dead pane, and preserve all buffered final output for later reads.

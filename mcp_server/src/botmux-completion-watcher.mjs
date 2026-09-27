@@ -3,6 +3,7 @@ import { mkdir, readdir, writeFile, link, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { atomicJson, jsonFile } from './runtime.mjs';
 import { sendBotmux, completionMessage } from './botmux-notifier.mjs';
+import { BotmuxTaskMonitor } from './botmux-task-monitor.mjs';
 import { describeTask } from './task-summary.mjs';
 
 const active = state => ['running', 'starting'].includes(state.status);
@@ -10,9 +11,11 @@ const finalDelivery = new Set(['sent', 'skipped', 'failed', 'uncertain']);
 const valid = (value, prefix) => new RegExp(`^${prefix}_[a-f0-9-]{36}$`).test(value ?? '');
 
 export class BotmuxCompletionWatcher {
-  constructor({ config, root, terminals, env, cwd, send = sendBotmux, now = Date.now }) {
+  constructor({ config, root, terminals, env, cwd, send = sendBotmux, run, now = Date.now }) {
     Object.assign(this, { config, root, terminals, env, cwd, send, now });
-    this.controller = new AbortController(); this.counts = {}; this.lastErrorCode = null;
+    this.controller = new AbortController();
+    this.monitor = new BotmuxTaskMonitor({ config, env, cwd, now, run, send, signal: this.controller.signal });
+    this.counts = {}; this.lastErrorCode = null;
   }
   async initialize() {
     if (!this.config.enabled) return this;
@@ -31,8 +34,9 @@ export class BotmuxCompletionWatcher {
       const file = this.file(state.sessionId, state.commandId);
       let record = await jsonFile(file, null);
       if (!record && active(state)) {
-        const fresh = { version: 1, terminalId: state.sessionId, commandId: state.commandId,
-          target: { sessionId: this.config.sessionId, mentionOpenId: this.config.mentionOpenId },
+        const fresh = { version: 2, mode: this.config.mode ?? 'completion', progressIntervalMs: this.config.progressIntervalMs, terminalId: state.sessionId, commandId: state.commandId,
+          target: { sessionId: this.config.sessionId, mentionOpenId: this.config.mentionOpenId,
+            ...(this.config.mode === 'task' ? { botAppId: this.config.botAppId, chatId: this.config.chatId } : {}) },
           minDurationMs: this.config.minDurationMs, status: 'watching', attempts: 0,
           registeredAt: this.now(), startedAt: state.startedAt ?? state.submittedAt ?? null,
           taskSummary: state.taskSummary ?? describeTask(state.command).taskSummary };
@@ -47,8 +51,11 @@ export class BotmuxCompletionWatcher {
       }
       if (!record) return state; // Do not backfill completed historical tasks.
       return { ...state, externalNotification: { provider: 'botmux', status: record.status,
+        mode: record.mode ?? 'completion', ...(record.task ? { task: { sessionId: record.task.sessionId, rootMessageId: record.task.rootMessageId, phase: record.task.phase } } : {}),
         registered: !['skipped', 'failed', 'uncertain'].includes(record.status), minDurationMs: record.minDurationMs,
-        instruction: 'A durable background watcher checks this task independently of the MCP client. Eligible completion is sent to the configured botmux session. Keep the task IDs for reading results; this does not rerun the command or schedule another ChatGPT turn.',
+        instruction: record.mode === 'task'
+          ? 'A durable background watcher delegates eligible long tasks to the configured bot in a dedicated new topic, mentions the recipient on start and completion, and forwards periodic progress. No continued MCP polling is needed. Keep the terminal and command IDs to read results.'
+          : 'A durable background watcher checks this task independently of the MCP client. Eligible completion is sent to the configured botmux session. Keep the task IDs for reading results; this does not rerun the command or schedule another ChatGPT turn.',
       } };
     } catch {
       this.lastErrorCode = 'watch_registration_failed';
@@ -85,6 +92,7 @@ export class BotmuxCompletionWatcher {
       if (error.code !== 'ENOENT') throw error;
       record.status = 'failed'; record.errorCode = 'task_record_missing'; await atomicJson(file, record); return;
     }
+    if (record.mode === 'task') return this.monitor.process(file, record, state);
     const start = Date.parse(state.startedAt ?? state.submittedAt ?? record.startedAt);
     if (active(state)) {
       if (!record.observedLong && Number.isFinite(start) && this.now() - start >= record.minDurationMs) {

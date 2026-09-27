@@ -4,7 +4,7 @@
 
 For ChatGPT setup, follow the **[Secure MCP Tunnel walkthrough](CHATGPT.md)** ([中文](CHATGPT.zh-CN.md)): create a tunnel, run the local client, then create a ChatGPT app with Connection set to Tunnel.
 
-A personal remote terminal for the account running the server. Release 0.5.8 exposes two tools by default:
+A personal remote terminal for the account running the server. Release 0.5.9 exposes two tools by default:
 
 - `execute_command`: shell commands, persistent tmux sessions, interactive input, and output polling.
 - `get_file`: original files and images, with resumable chunks for large files.
@@ -339,22 +339,27 @@ if (state.monitoringStopped) {
 `monitorUntilYield` acknowledges `onPage` before returning its checkpoint, or retains the caller's cursor when using status-only reads. Existing `waitForCompletion` intentionally remains continuous monitoring for automation; it ignores defer advice by default. Deferred output is still subject to configured log retention: use durable artifact/log files for long tasks whose full output must survive without a reader. Notifications require a live listening client and do not schedule a later model turn.
 
 
-### Optional botmux completion notifications
+### Optional botmux task monitoring
 
-`notifications.botmux.enabled` is false by default. Enabling it adds a durable background watcher to the standalone service; it does not require a model turn, an open MCP client, or a botmux scheduling prompt. The service checks persisted command state and calls the installed `botmux send` CLI on eligible completion. It does not import botmux packages or inherit interactive `BOTMUX_*` routing. With the integration disabled, botmux need not be installed.
+`notifications.botmux.enabled` defaults to false. The terminal service runs independently of botmux. Task mode delegates each eligible long command to a botmux agent, creates a dedicated new topic in the configured group, and sends an opening message that mentions the recipient. The agent receives periodic state events and returns a short summary. The service delivers that summary using the agent's explicitly bound botmux session, and mentions the recipient again on completion or failure. ChatGPT can stop polling while the original command continues.
 
-Configure this in the private `config.local.json` overlay:
+Configure the private `config.local.json` overlay:
 
 ```json
 {
   "notifications": {
     "botmux": {
       "enabled": true,
+      "mode": "task",
       "executable": "/absolute/path/to/botmux",
-      "sessionId": "11111111-1111-4111-8111-111111111111",
+      "botAppId": "cli_BOT_APP",
+      "chatId": "oc_TARGET_GROUP",
       "mentionOpenId": "ou_RECIPIENT",
       "minDurationMs": 300000,
+      "progressIntervalMs": 300000,
       "pollIntervalMs": 5000,
+      "taskTimeoutMs": 120000,
+      "eventTimeoutMs": 120000,
       "sendTimeoutMs": 15000,
       "retryDelayMs": 30000,
       "maxAttempts": 5
@@ -363,15 +368,21 @@ Configure this in the private `config.local.json` overlay:
 }
 ```
 
-The botmux `sessionId` selects both the sending bot identity and its chat/thread destination; it is unrelated to a terminal `sessionId`. To use a particular bot, choose an existing authorized session belonging to that bot. Use a real authorized botmux session and recipient; empty `mentionOpenId` explicitly sends without mentioning anyone. A supervised process needs an executable reachable through its configured path and a botmux installation that permits that fixed route. No agent credentials or turn identity are copied into the service. Environment overrides are `MCP_BOTMUX_ENABLED`, `MCP_BOTMUX_EXECUTABLE`, `MCP_BOTMUX_SESSION_ID`, `MCP_BOTMUX_MENTION_OPEN_ID`, `MCP_BOTMUX_MIN_DURATION_MS`, `MCP_BOTMUX_POLL_INTERVAL_MS`, `MCP_BOTMUX_SEND_TIMEOUT_MS`, `MCP_BOTMUX_RETRY_DELAY_MS`, and `MCP_BOTMUX_MAX_ATTEMPTS`. Supervised deployment uses the configuration overlay; restart the server to apply changes.
+The bot must belong to the group, and the recipient must be an authorized group member. Task mode requires all three destination IDs. It creates one topic per command; it does not select a previous conversation. The opening and final messages explicitly mention `mentionOpenId`; routine progress does not. Messages use plain paragraphs with real newlines. Set `progressIntervalMs` to the desired minimum interval between updates; agent execution and delivery add latency. `taskTimeoutMs` bounds each automation CLI call; `eventTimeoutMs` bounds waiting for a queued agent summary. These limits never cancel the terminal command.
 
-Running tracked terminal calls register once and return `externalNotification` with the provider, registration/delivery state and threshold. The watcher sends for success, failure, or attention states that meet the duration threshold. Short completed tasks and previously completed history are not backfilled. The threshold uses the actual start/finish times, so downtime cannot turn a short command into a long one. If the finish timestamp is unavailable, a previously observed long running interval can establish a lower bound; otherwise duration stays uncertain and no completion is invented.
+Use a botmux version supporting `session start/send/result`, `headless bind --scope thread --replay none`, and `send --session-id`. The implementation uses the CLI as an optional adapter, with no botmux package imports or inherited interactive routing. Binding suppresses automatic transcript replay; the service sends the opening, progress and final messages through the same formatter. A task starts after the actual running time reaches `minDurationMs`, or earlier when its caller-supplied `estimatedDurationMs` reaches that threshold. The estimate is labeled as caller input and is not a measured ETA. Short tasks without an early estimate stay silent.
 
-Records live under `paths.service/botmux-notifications`. Each record pins its original destination and threshold. Clients/restarts do not replace them; config changes apply to new registrations. Disable the integration to suspend all checks/sends, retaining records for a later re-enable. Completed records remain as deduplication tombstones. `/healthz.backgroundNotifications` reports record counts and a safe last error code. `failed` and `uncertain` need operator inspection; this release does not automatically resend uncertain records.
+### Optional botmux completion notifications
 
-Reported CLI failures use bounded backoff; missing binaries do not stop commands. A send in progress during a crash, a timeout, or an absent success receipt is marked uncertain rather than blindly replayed. This cannot guarantee exactly-once delivery across external transport failures. Messages contain a task-purpose summary, an execution/output-state result summary, exit code, runtime and saved task IDs. They do not copy command arguments or terminal output. The result summary describes observed process state, not a semantic analysis of logs. Use the IDs to retrieve artifacts; notifications do not wake a ChatGPT turn. The watcher resumes only when the MCP service is running. Its file lock also coordinates multiple local MCP processes sharing a notification directory.
+For a fixed existing destination, retain `mode: "completion"` (the compatibility default) and set `sessionId` to an authorized botmux session UUID. This mode sends only the final state and does not create an agent or topic. Its botmux `sessionId` selects both the bot and the destination; it is unrelated to a terminal `sessionId`. Empty `mentionOpenId` is allowed only in this mode.
 
-Tests disable notification routing by default; integration tests explicitly use isolated fake botmux executables.
+Both modes register a durable watch once per active tracked command. Responses include `externalNotification` with the mode, registration/delivery state, threshold and, after delegation, bot task/topic IDs. Previously completed history is not backfilled. Execution status and output collection status remain separate; unknown results are reported as unknown. Messages include the saved task purpose, runtime, exit code and task IDs, without command arguments or terminal logs. Agent summaries describe state, not the contents of task artifacts.
+
+Records under `paths.service/botmux-notifications` pin their original mode, destination, threshold and progress interval. Restarts resume the existing task/topic and pending event, instead of creating another. Configuration changes apply to new registrations. Disable the integration to suspend checks and retain records. Completed records remain for deduplication; `/healthz.backgroundNotifications` reports counts and a safe last error code. The service must be running to deliver updates.
+
+Only one event is pending per task. If an agent misses its response deadline, the service reports observed state directly and marks the summary unavailable, including on completion, without queuing more turns behind the stalled one. Failures before a process starts have bounded retries. A crash or ambiguous receipt during task creation, binding, event submission or message delivery becomes `uncertain` for operator inspection; automatic replay could duplicate a topic or message. Delivery is not guaranteed exactly once across an external failure. Botmux failures do not stop commands or block MCP tool replies. Workers coordinate through the shared notification-directory lock.
+
+Environment overrides include `MCP_BOTMUX_ENABLED`, `MCP_BOTMUX_MODE`, `MCP_BOTMUX_EXECUTABLE`, `MCP_BOTMUX_BOT_APP_ID`, `MCP_BOTMUX_CHAT_ID`, `MCP_BOTMUX_SESSION_ID`, `MCP_BOTMUX_MENTION_OPEN_ID`, `MCP_BOTMUX_MIN_DURATION_MS`, `MCP_BOTMUX_PROGRESS_INTERVAL_MS`, `MCP_BOTMUX_POLL_INTERVAL_MS`, `MCP_BOTMUX_TASK_TIMEOUT_MS`, `MCP_BOTMUX_EVENT_TIMEOUT_MS`, `MCP_BOTMUX_SEND_TIMEOUT_MS`, `MCP_BOTMUX_RETRY_DELAY_MS`, and `MCP_BOTMUX_MAX_ATTEMPTS`. Restart only the MCP server to apply the private overlay. Tests use isolated fake adapters and disable live routing by default.
 
 Supply an optional `taskSummary` (1–240 characters) when submitting long work, for example:
 

@@ -17,10 +17,16 @@ const schema = z.object({
   auth: z.object({ tokenEnv: text.regex(/^[A-Za-z_][A-Za-z0-9_]*$/), token: z.string().optional() }).strict(),
   tools: z.object({ profile: z.enum(['minimal', 'legacy']), enableWrite: z.boolean(), enableTerminal: z.boolean() }).strict(),
   notifications: z.object({ botmux: z.object({ enabled: z.boolean(), executable: text,
+    mode: z.enum(['completion', 'task']), botAppId: z.string().regex(/^(?:cli_[a-zA-Z0-9]+)?$/), chatId: z.string().regex(/^(?:oc_[a-zA-Z0-9]+)?$/),
+    progressIntervalMs: count(1000, 86400000), taskTimeoutMs: count(1000, 300000), eventTimeoutMs: count(1000, 3600000),
     sessionId: z.union([z.literal(''), z.string().uuid()]), mentionOpenId: z.string().regex(/^(?:ou_[a-zA-Z0-9]+)?$/),
     minDurationMs: count(1000, 2147483647), pollIntervalMs: count(100, 60000),
     sendTimeoutMs: count(100, 60000), retryDelayMs: count(100, 300000), maxAttempts: count(1, 20),
-  }).strict().refine(c => !c.enabled || !!c.sessionId, { path: ['sessionId'], message: 'required when botmux notifications are enabled' }) }).strict(),
+  }).strict().superRefine((c, ctx) => {
+    for (const field of c.mode === 'task' ? ['botAppId', 'chatId', 'mentionOpenId'] : ['sessionId']) {
+      if (c.enabled && !c[field]) ctx.addIssue({ code: 'custom', path: [field], message: 'required for the enabled botmux mode' });
+    }
+  }) }).strict(),
   files: z.object({ maxBytes: count(65536, 33554432), directMaxBytes: count(65536, 33554432) }).strict(),
   terminal: z.object({ foregroundBudgetMs: count(1000, 300000), shell: text, maxSessions: count(1, 1000), maxWaitMs: count(100, 120000), maxOutputBytes: count(1024, 2097152), idleTtlMs: count(0, 2147483647), gcIntervalMs: count(1000, 2147483647) }).strict(),
   jobs: z.object({ maxCount: count(1, 100000), maxRunning: count(1, 10000), retentionDays: count(0, 36500) }).strict(),
@@ -45,6 +51,9 @@ const bindings = {
   MCP_BOTMUX_MIN_DURATION_MS: ['notifications.botmux.minDurationMs', 'number'], MCP_BOTMUX_POLL_INTERVAL_MS: ['notifications.botmux.pollIntervalMs', 'number'],
   MCP_BOTMUX_SEND_TIMEOUT_MS: ['notifications.botmux.sendTimeoutMs', 'number'], MCP_BOTMUX_RETRY_DELAY_MS: ['notifications.botmux.retryDelayMs', 'number'],
   MCP_BOTMUX_MAX_ATTEMPTS: ['notifications.botmux.maxAttempts', 'number'],
+  MCP_BOTMUX_MODE: ['notifications.botmux.mode', 'string'], MCP_BOTMUX_BOT_APP_ID: ['notifications.botmux.botAppId', 'string'],
+  MCP_BOTMUX_CHAT_ID: ['notifications.botmux.chatId', 'string'], MCP_BOTMUX_PROGRESS_INTERVAL_MS: ['notifications.botmux.progressIntervalMs', 'number'],
+  MCP_BOTMUX_TASK_TIMEOUT_MS: ['notifications.botmux.taskTimeoutMs', 'number'], MCP_BOTMUX_EVENT_TIMEOUT_MS: ['notifications.botmux.eventTimeoutMs', 'number'],
   MCP_FILE_MAX_BYTES: ['files.maxBytes', 'number'], MCP_DIRECT_FILE_MAX_BYTES: ['files.directMaxBytes', 'number'],
   MCP_TERMINAL_SHELL: ['terminal.shell', 'string'], MCP_TERMINAL_MAX_SESSIONS: ['terminal.maxSessions', 'number'], MCP_TERMINAL_MAX_TIMEOUT_MS: ['terminal.maxWaitMs', 'number'], MCP_TERMINAL_MAX_OUTPUT_BYTES: ['terminal.maxOutputBytes', 'number'],
   MCP_TERMINAL_IDLE_TTL_MS: ['terminal.idleTtlMs', 'number'], MCP_TERMINAL_GC_INTERVAL_MS: ['terminal.gcIntervalMs', 'number'],

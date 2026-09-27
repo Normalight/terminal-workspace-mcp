@@ -55,7 +55,7 @@ For a persistent local token, put `{"auth":{"token":"your-token"}}` in `mcp_serv
 
 ## Use the two tools
 
-Optional [botmux completion notifications](mcp_server/README.md#optional-botmux-completion-notifications) can monitor long tasks after clients disconnect and send status to a configured session. The integration is disabled by default; task execution remains available without botmux.
+Optional [botmux task monitoring](mcp_server/README.md#optional-botmux-task-monitoring) delegates long tasks to a configured bot in a dedicated new topic, mentions the recipient on start/completion, and sends periodic progress after clients disconnect. The integration is disabled by default; task execution remains available without botmux.
 
 Prefer absolute paths on every call. Use an absolute `cwd` for new sessions; on reused sessions, use absolute operands or explicitly change directory. For long tasks, start once and listen for the completion notification on the calling MCP connection; fetch remaining output using saved IDs/cursors. Clients without notification handling can poll with `sessionId`/`commandId`/`nextCursor` and a wait of up to five seconds by default. See [completion notifications and recovery](mcp_server/README.md#long-tasks). On `nextAction:defer`, end foreground monitoring and report the running task with its suggested check interval. It is not a completion ETA or an automatic scheduled check. Check the final status and exit code before reporting completion.
 
@@ -108,7 +108,7 @@ node mcp_server/scripts/measure_tools.mjs
 
 Tests use isolated directories and local ports. GitHub Actions runs the suite on Linux with Node.js 22 and 24. Contributions and reproducible bug reports are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Long submissions may include `taskSummary` (1–240 characters). Completion notices preserve this purpose across restarts and summarize execution/output state; omitted descriptions use a coarse task category. The botmux `sessionId` selects both the sending bot and its chat/thread destination.
+Long submissions may include `taskSummary` (1–240 characters). Completion notices preserve this purpose across restarts and summarize execution/output state; omitted descriptions use a coarse task category. Task mode uses `botAppId`, `chatId` and `mentionOpenId` for the bot, new-topic group and recipient; `progressIntervalMs` controls update frequency. Completion mode retains a fixed botmux `sessionId`.
 
 ## License
 
