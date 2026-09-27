@@ -54,7 +54,7 @@ test('poll includes final output when completion arrives after its initial read'
       exited = await call({ sessionId: initial.sessionId, commandId: exited.commandId, cursor: exited.nextCursor, waitMs: 500 });
       exitOutput += exited.stdout;
     }
-    assert.equal(exited.status, 'terminal_closed'); assert.equal(exited.exitCode, 3);
+    assert.equal(exited.status, 'terminal_closed', JSON.stringify({ result: exited, pane: await t.pane(initial.sessionId), output: exitOutput })); assert.equal(exited.exitCode, 3);
     assert.match(exitOutput, /BEFORE_EXIT/);
   } finally { if (id) await t.close(id); await t.run(['kill-server']).catch(() => {}); await f.cleanup(); }
 });
