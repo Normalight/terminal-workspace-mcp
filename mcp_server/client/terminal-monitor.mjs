@@ -12,7 +12,7 @@ function wait(client, key, ms, signal) {
 
 // onPage owns durable consumption: advance only after it has written output and
 // saved its checkpoint. Without a consumer, poll metadata and read output once.
-export async function monitorTerminal(client, args, { timeoutMs = 30 * 60 * 1000, onPage, pollIntervalMs = 1000 } = {}) {
+export async function monitorTerminal(client, args, { timeoutMs = 30 * 60 * 1000, onPage, pollIntervalMs = 1000, deferOnAdvice = false } = {}) {
   if (!args.sessionId || !args.commandId) throw TypeError('completion recovery requires saved sessionId and commandId');
   for (const [name, value] of Object.entries({ timeoutMs, pollIntervalMs })) {
     if (!Number.isSafeInteger(value) || value <= 0) throw TypeError(`invalid ${name}`);
@@ -30,9 +30,15 @@ export async function monitorTerminal(client, args, { timeoutMs = 30 * 60 * 1000
         const next = outputCheckpoint(checkpoint, page);
         await onPage(page, next);
         checkpoint = next;
-        // Drain the bounded pages immediately, before waiting for new output.
-        if (page.outputTruncated) continue;
       }
+      // A foreground caller yields even when a long task still has unread
+      // output. The consumer has acknowledged only this page, not future ones.
+      if (deferOnAdvice && page.nextAction === 'defer') return { ...page, monitoringStopped: true,
+        recovery: { ...checkpoint, waitMs: 0 },
+        ...(onPage ? { outputGap: checkpoint.outputGap, outputComplete: checkpoint.outputComplete } : {}),
+      };
+      // Explicit continuous monitoring keeps draining before waiting.
+      if (onPage && page.outputTruncated) continue;
       if (page.interaction) {
         const error = new Error(page.interaction.message);
         error.code = 'interaction_required'; error.state = page; throw error;

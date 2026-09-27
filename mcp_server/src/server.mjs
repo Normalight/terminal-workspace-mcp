@@ -62,7 +62,7 @@ const terminalGcTimer = setInterval(async () => {
 terminalGcTimer.unref();
 let revision = "unknown";
 try { revision = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8", timeout: 2000 }).trim(); } catch {}
-const version = "0.5.4";
+const version = "0.5.5";
 const maxSessions = settings.http.sessions.max;
 let toolCount = 0;
 const startedAt = Date.now();
@@ -119,7 +119,7 @@ export function createMcpServer() {
   });
   server.server.onclose = () => completions.close();
   registerTools(server, { workspace, executor: localExecutor, jobs: jobManager, terminals: terminalManager, completions,
-    config: { enableTerminal, enableWrite, directFileMaxBytes, childEnv, version, toolProfile, waitSignal: lifecycle.signal },
+    config: { enableTerminal, enableWrite, directFileMaxBytes, childEnv, version, toolProfile, waitSignal: lifecycle.signal, foregroundBudgetMs: settings.terminal.foregroundBudgetMs },
     diagnostics: async () => ({ version, revision, toolCount, toolProfile, workspace: workspace.root, writesEnabled: enableWrite, terminalEnabled: enableTerminal, sessions: sessionStats(), counters: runtimeCounters, auditDropped, jobs: await jobManager.list({ limit: 10 }), limits: { maxSessions, directFileMaxBytes, ...logsConfig } }),
   });
   toolCount = Object.keys(server._registeredTools).length;

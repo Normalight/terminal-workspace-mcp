@@ -14,7 +14,7 @@ python3 -B mcp_server/scripts/service.py status
 curl --noproxy '*' -fsS http://127.0.0.1:5679/healthz
 ```
 
-默认配置应显示 `version: "0.5.4"`、`toolProfile: "minimal"`、`toolCount: 2`。修改过监听地址时相应调整命令。健康检查只能说明服务可用，认证和工具发现还要通过后面的连接验证。
+默认配置应显示 `version: "0.5.5"`、`toolProfile: "minimal"`、`toolCount: 2`。修改过监听地址时相应调整命令。健康检查只能说明服务可用，认证和工具发现还要通过后面的连接验证。
 
 ## 2. 使用 Secure MCP Tunnel
 
@@ -112,3 +112,6 @@ python3 -B mcp_server/scripts/diagnose_transport.py \
 ```
 
 报告保存到工作区 `outputs/mcp-diagnostics`；自定义部署传 `--config`。HTTP 审计包含保留的轮转片段及跨时间窗的请求，不包含命令正文或认证头。隧道计数仍是进程启动以来的累计值，不能当作该时间窗的错误次数。HTTP 200 也不等于工具业务成功或浏览器已经收到。若没有对应请求，仍需排除审计保留范围之外或日志丢失的情况。
+
+
+收到 `nextAction:defer` 时，报告任务仍在运行，保存 `monitoring.resume`，结束本轮前台轮询。`checkAfterMs` 只是建议复查间隔，不是完成时间或自动提醒。只有调用方提供了有依据的耗时估计才展示 ETA；无估计或超出估计时应明确未知。

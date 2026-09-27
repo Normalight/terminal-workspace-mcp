@@ -114,7 +114,7 @@ node mcp_server/scripts/measure_tools.mjs
 
 ### 完成状态与分页器
 
-工具返回明确的 `nextAction`：`poll` 等待运行中的任务，`read_output` 读取剩余页，`input` 处理前台分页器，`inspect` 核查不明执行或输出缺口，`done` 停止轮询。任务终态与输出完整性分别判断；缺失输出不会通过重复轮询自动恢复。超过 4 KiB 的结果也会在文本区保留完整的有界 JSON（含状态、退出码、游标和输出），兼容只读取文本的客户端。
+工具返回明确的 `nextAction`：`defer` 结束本轮监控并报告任务仍在运行，`poll` 等待短任务，`read_output` 读取剩余页，`input` 处理前台分页器，`inspect` 核查不明执行或输出缺口，`done` 停止轮询。任务终态与输出完整性分别判断；缺失输出不会通过重复轮询自动恢复。超过 4 KiB 的结果也会在文本区保留完整的有界 JSON（含状态、退出码、游标和输出），兼容只读取文本的客户端。
 
 新终端默认 `PAGER/GIT_PAGER/SYSTEMD_PAGER=cat`。旧终端保留原环境，应使用 `git --no-pager`；若检测到前台分页器，会返回 `interaction`，读完后显式发送 `input:"q"`。SDK 等待助手会抛出带原任务状态的 `interaction_required`，不继续空等。完成通知仍要求客户端实际保持监听；`listening:false` 会同时明确返回轮询兜底。
 
@@ -131,3 +131,8 @@ node mcp_server/scripts/measure_tools.mjs
 HTTP 单次主动等待默认最多 5 秒，即使旧对话仍传入 30 秒，也会返回原任务状态与游标，标注 `requestedWaitMs/effectiveWaitMs/waitLimited`。这不会限制命令执行时长；初始化、文件系统等开销不属于等待预算。可通过 `http.maxToolWaitMs` 配置。
 
 有限 HTTP 响应默认明确关闭 TCP 连接，避免复用临近过期的空闲连接；MCP 会话仍可在新连接复用，SSE 通知保持开启。`http.closeFiniteConnections` 可配置。两项措施是传输风险缓解，不保证修复 ChatGPT 网页内部的 stream recovery 报错。
+
+
+长任务默认运行 30 秒后返回 `nextAction:defer`，建议客户端保存 `monitoring.resume` 并结束本轮等待，任务继续运行。`checkAfterMs` 是建议 30–120 秒后再查看，不是预计完成时间，也不会自动创建提醒。后续需要用户请求或宿主支持的调度。
+
+有依据时可在提交命令时传 `estimatedDurationMs`，用于保留调用方的总耗时估计；超过前台预算的估计会立即建议 defer。没有估计或已超出估计时，`estimatedRemainingMs=null`，不得编造 ETA。预算可用 `terminal.foregroundBudgetMs` 配置。SDK 新增 `monitorUntilYield` 返回运行中的任务和续读参数；`waitForCompletion` 保留明确持续监控的行为。长任务完整日志建议写入持久文件，暂停读取期间仍受日志保留策略限制。

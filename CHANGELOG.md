@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.5
+
+- Long terminal commands return explicit foreground defer guidance after a configurable 30-second task-age budget, without cancelling work or changing completion state.
+- Persist optional caller runtime estimates; distinguish remaining estimates from suggested check intervals and report exceeded/unknown estimates honestly.
+- Add `monitorUntilYield` for clients that should return control with resumable checkpoints; retain `waitForCompletion` for explicit continuous monitoring.
+
 ## 0.5.4 — 2026-09-27
 
 - Cap HTTP execution/output waiting at a configurable five seconds even when a caller uses a cached schema and requests thirty seconds. Return requested/effective wait metadata without stopping or replaying the task.

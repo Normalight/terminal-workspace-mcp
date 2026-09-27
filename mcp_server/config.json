@@ -33,6 +33,7 @@
     "directMaxBytes": 1048576
   },
   "terminal": {
+    "foregroundBudgetMs": 30000,
     "shell": "/bin/bash",
     "maxSessions": 32,
     "maxWaitMs": 120000,

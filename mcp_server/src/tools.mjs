@@ -115,13 +115,14 @@ export function registerTools(server, { workspace: w, executor, jobs, terminals:
   registerAuditedTool(server, "execute_command", {
     title: "Execute in persistent terminal",
     description: terminalDescription,
-    inputSchema: { statusOnly: z.boolean().optional().describe("Read saved command state without output or cursor advancement; requires commandId. Read output separately after completion."), outputScope: z.enum(["command", "terminal"]).optional().describe("Command byte range by default for tracked work; terminal selects shared PTY history."), command: string.max(20000).optional(), sessionId: sessionId.optional(), terminalKey, commandId: commandId.optional().describe("Read/subscribe to a specific saved command; requires sessionId or terminalKey and no command/input/key."), notifyOnCompletion, cwd: string.optional(), input: string.max(65536).optional(), key: z.enum(["C-c", "C-d", "C-z", "Enter", "Escape", "Tab"]).optional(), cursor: z.number().int().min(0).optional(), waitMs: z.number().int().min(0).max(30000).default(1000), maxBytes },
+    // Estimated duration is caller-supplied metadata, never an execution limit.
+    inputSchema: { estimatedDurationMs: z.number().int().min(1).max(2147483647).optional().describe("Estimated total runtime (ms), submission only. Caller-supplied, not a deadline; omit if unknown."), statusOnly: z.boolean().optional().describe("Read saved command state without output or cursor advancement; requires commandId. Read output separately after completion."), outputScope: z.enum(["command", "terminal"]).optional().describe("Command byte range by default for tracked work; terminal selects shared PTY history."), command: string.max(20000).optional(), sessionId: sessionId.optional(), terminalKey, commandId: commandId.optional().describe("Read/subscribe to a specific saved command; requires sessionId or terminalKey and no command/input/key."), notifyOnCompletion, cwd: string.optional(), input: string.max(65536).optional(), key: z.enum(["C-c", "C-d", "C-z", "Enter", "Escape", "Tab"]).optional(), cursor: z.number().int().min(0).optional(), waitMs: z.number().int().min(0).max(30000).default(1000), maxBytes },
     outputSchema: object, annotations: modifying,
   }, async (a) => {
     try {
       if (!config.enableTerminal) throw new OperationError("set MCP_ENABLE_TERMINAL=1 to enable execution", "terminal_disabled");
       const wait = toolWait(a);
-      const value = { ...await executeTerminalCall(t, { ...wait.args, signal: config.waitSignal }, async value => (await cwd(value)).absolute), ...wait.metadata };
+      const value = { ...await executeTerminalCall(t, { ...wait.args, signal: config.waitSignal, foregroundBudgetMs: config.foregroundBudgetMs }, async value => (await cwd(value)).absolute), ...wait.metadata };
       if (config.waitSignal?.aborted) value.serverRestarting = true;
       return result(completions ? completions.observe(value, a.notifyOnCompletion, !!a.command?.trim()) : value);
     } catch (error) { return errorResult(error); }

@@ -14,7 +14,7 @@ python3 -B mcp_server/scripts/service.py status
 curl --noproxy '*' -fsS http://127.0.0.1:5679/healthz
 ```
 
-With the default configuration, health reports `version: "0.5.4"`, `toolProfile: "minimal"`, and `toolCount: 2`. Adjust the URL if you changed the listener. Health is a liveness check; it does not prove authenticated tool discovery works.
+With the default configuration, health reports `version: "0.5.5"`, `toolProfile: "minimal"`, and `toolCount: 2`. Adjust the URL if you changed the listener. Health is a liveness check; it does not prove authenticated tool discovery works.
 
 ## 2. Connect a Secure MCP Tunnel
 
@@ -110,3 +110,6 @@ python3 -B mcp_server/scripts/diagnose_transport.py \
 ```
 
 Reports go to workspace-local `outputs/mcp-diagnostics`; pass `--config` for another deployment. The audit includes retained rotated segments and requests overlapping the window, with no command bodies or authorization headers. Tunnel counters remain cumulative since process start. HTTP 200 alone establishes neither tool success nor browser receipt. Missing records can also mean the relevant audit data was not retained.
+
+
+On `nextAction:defer`, report that the task is still running, save `monitoring.resume`, and end foreground polling for the turn. `checkAfterMs` is a suggested next check, not an ETA or an automatic reminder. Only present an ETA if supported by a caller-provided estimate; unknown or exceeded estimates remain unknown.

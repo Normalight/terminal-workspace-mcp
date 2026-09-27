@@ -132,6 +132,7 @@ export class ReconnectingTerminalClient {
   }
 
   async waitForCompletion(args, options) { return monitorTerminal(this, args, options); }
+  async monitorUntilYield(args, options) { return monitorTerminal(this, args, { ...options, deferOnAdvice: true }); }
   async close() {
     this.lifecycle.abort(); this.wake();
     if (this.connecting) await this.connecting.catch(() => {});

@@ -13,9 +13,12 @@ export class CompletionNotifications {
     if (!id || (!state.jobId && !state.sessionId)) return state;
     const key = state.jobId ? `job:${id}` : `${state.sessionId}:${id}`;
     const active = ['running', 'starting'].includes(state.status);
+    const fallback = state.nextAction === 'defer'
+      ? { fallback: 'defer', checkAfterMs: state.monitoring.checkAfterMs }
+      : { fallback: 'poll', pollAfterMs: 1000 };
     if (requested === false) this.pending.delete(key);
     else if (!this.closed && (requested === true || (auto && active)) && !this.sent.has(key) && !this.pending.has(key)) {
-      if (this.pending.size >= this.maxPending) return { ...state, completionNotification: { subscribed: false, reason: 'subscription_limit', fallback: 'poll' } };
+      if (this.pending.size >= this.maxPending) return { ...state, completionNotification: { subscribed: false, reason: 'subscription_limit', ...fallback } };
       this.pending.set(key, state.jobId ? { jobId: id } : { sessionId: state.sessionId, commandId: id });
       this.timer ??= setInterval(() => { void this.tick(); }, this.intervalMs);
       this.timer.unref();
@@ -24,7 +27,7 @@ export class CompletionNotifications {
     return { ...state, completionNotification: {
       method: 'notifications/message', logger: 'terminal-workspace.completion',
       subscribed: this.pending.has(key), listening: this.ready(), sent: this.sent.has(key),
-      ...(!this.ready() && active ? { fallback: 'poll', reason: 'no_listener', pollAfterMs: 1000 } : {}),
+      ...(!this.ready() && active ? { ...fallback, reason: 'no_listener' } : {}),
     } };
   }
 

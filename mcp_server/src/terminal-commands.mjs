@@ -27,9 +27,10 @@ export async function collectorState(manager, session, pane) {
   return { alive: !!pane.pipeActive, status: 'legacy' };
 }
 
-export async function submitCommand(manager, id, { command, waitMs = 1000, maxBytes = 65536, signal } = {}) {
+export async function submitCommand(manager, id, { command, waitMs = 1000, maxBytes = 65536, signal, estimatedDurationMs } = {}) {
   if (typeof command !== 'string' || !command.trim() || command.length > 20000) throw new OperationError('command must be 1..20000 characters', 'invalid_input');
   integer(waitMs, 'waitMs', 0, 30000);
+  if (estimatedDurationMs !== undefined) integer(estimatedDurationMs, 'estimatedDurationMs', 1, 2147483647);
   const commandId = await manager.locked(id, async () => {
     checkSubmission(signal);
     const state = await manager.status(id);
@@ -50,7 +51,8 @@ export async function submitCommand(manager, id, { command, waitMs = 1000, maxBy
     const tail = await readLog(state.log, { maxBytes: 4, segmentBytes: state.logs.segmentBytes });
     checkSubmission(signal);
     const meta = { commandId: cid, sessionId: id, command, cwd: state.cwd, submittedAt: new Date().toISOString(),
-      startedAt: null, startCursor: tail.endCursor, submissionProtocol: 1 };
+      startedAt: null, startCursor: tail.endCursor, submissionProtocol: 1,
+      ...(estimatedDurationMs !== undefined ? { estimatedDurationMs } : {}) };
     await atomicWrite(base + '.sh', command + '\n');
     await atomicJson(base + '.json', meta);
     await atomicJson(base + '.delivery.json', { phase: 'prepared' });
