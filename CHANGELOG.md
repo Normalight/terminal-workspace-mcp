@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.6
+
+- Add opt-in persistent completion watches with an explicit botmux session destination and long-task threshold; command execution remains independent of botmux availability.
+- Recover watches across MCP restarts, deduplicate readers/senders, retry reported send failures with backoff, and surface interrupted/unconfirmed delivery without blind replay.
+- Keep completion messages limited to task identifiers/status and isolate tests from production notification routing.
+
 ## 0.5.5
 
 - Long terminal commands return explicit foreground defer guidance after a configurable 30-second task-age budget, without cancelling work or changing completion state.

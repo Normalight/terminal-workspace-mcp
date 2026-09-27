@@ -136,3 +136,6 @@ HTTP 单次主动等待默认最多 5 秒，即使旧对话仍传入 30 秒，�
 长任务默认运行 30 秒后返回 `nextAction:defer`，建议客户端保存 `monitoring.resume` 并结束本轮等待，任务继续运行。`checkAfterMs` 是建议 30–120 秒后再查看，不是预计完成时间，也不会自动创建提醒。后续需要用户请求或宿主支持的调度。
 
 有依据时可在提交命令时传 `estimatedDurationMs`，用于保留调用方的总耗时估计；超过前台预算的估计会立即建议 defer。没有估计或已超出估计时，`estimatedRemainingMs=null`，不得编造 ETA。预算可用 `terminal.foregroundBudgetMs` 配置。SDK 新增 `monitorUntilYield` 返回运行中的任务和续读参数；`waitForCompletion` 保留明确持续监控的行为。长任务完整日志建议写入持久文件，暂停读取期间仍受日志保留策略限制。
+
+
+可选的 `notifications.botmux` 集成默认关闭。启用并指定接收会话、@ 对象后，后台持久化监听默认超过 5 分钟的任务，完成或失败时调用 botmux 发送状态通知；不需要 ChatGPT 持续轮询。阈值、检查周期和发送重试均可配置。服务重启后恢复监听，重复查询不会重复登记；发送结果不明时保留待核查记录。终端服务仍独立运行，botmux 不可用不会中止命令。配置与边界见[通知配置](mcp_server/README.md#optional-botmux-completion-notifications)。

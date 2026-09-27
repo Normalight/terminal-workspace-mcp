@@ -59,3 +59,6 @@ HTTP waiting defaults to a server-side five-second cap. When waitLimited is true
 
 
 For defer, save monitoring.resume and show monitoring.checkAfterMs/checkAfterAt as a suggested next check, never a promised finish time. Do not wait out the interval with repeated tools or sleep calls. Later checks need a user request or a supported scheduler; do not promise an automatic follow-up. Continue monitoring only when explicitly requested. estimatedDurationMs is an optional submission-only caller estimate, justified by task knowledge; unknown or exceeded estimates have estimatedRemainingMs=null. The default foreground budget is 30 seconds of persisted task age, and a longer supplied estimate yields immediately. Keep unread cursors; use durable log/artifact files for output that must outlive retention.
+
+
+If externalNotification reports provider=botmux and registered=true, a durable server-side watcher will notify the configured destination for tasks meeting minDurationMs. Keep the same task IDs and follow defer normally; do not start another watcher or promise a ChatGPT turn will resume automatically. failed/uncertain mean notification delivery needs inspection, not task failure or permission to replay the command. Disabled deployments retain the existing manual/scheduler follow-up behavior.

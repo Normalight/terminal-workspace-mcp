@@ -1,6 +1,6 @@
 {
   "name": "terminal-workspace-mcp",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "private": true,
   "type": "module",
   "description": "Personal remote terminal MCP with tmux sessions, durable jobs, and paged file transfers.",
@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/server.mjs",
     "start:stdio": "node src/stdio.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "MCP_BOTMUX_ENABLED=0 node --test test/*.test.mjs"
   },
   "dependencies": {
     "@hono/node-server": "2.1.1",

@@ -42,12 +42,13 @@ function readonlyCommand(command) {
     throw new OperationError("command is not a read-only query; use execute_command", "read_only_policy_denied");
   }).join(" && ");
 }
-export function registerTools(server, { workspace: w, executor, jobs, terminals: t, completions, config, diagnostics }) {
+export function registerTools(server, { workspace: w, executor, jobs, terminals: t, completions, backgroundNotifications, config, diagnostics }) {
   const definitions = new Map();
   const define = (name, spec, callback) => definitions.set(name, { spec, callback });
   const register = (name, description, schema, run, annotations = readOnly) => define(name, { title: name.replaceAll("_", " "), description, inputSchema: schema, outputSchema: object, annotations }, async (args, extra) => {
     try {
-      const value = await run(args, extra);
+      const raw = await run(args, extra);
+      const value = backgroundNotifications ? await backgroundNotifications.observe(raw) : raw;
       const observed = ['execute_command', 'run_terminal', 'execute_readonly_command', 'start_job', 'execute_in_terminal', 'get_job_status', 'get_terminal_command'].includes(name);
       const state = config.waitSignal?.aborted ? { ...value, serverRestarting: true } : value;
       return result(observed && completions ? completions.observe(state, args.notifyOnCompletion, !name.startsWith('get_')) : state);
@@ -122,7 +123,8 @@ export function registerTools(server, { workspace: w, executor, jobs, terminals:
     try {
       if (!config.enableTerminal) throw new OperationError("set MCP_ENABLE_TERMINAL=1 to enable execution", "terminal_disabled");
       const wait = toolWait(a);
-      const value = { ...await executeTerminalCall(t, { ...wait.args, signal: config.waitSignal, foregroundBudgetMs: config.foregroundBudgetMs }, async value => (await cwd(value)).absolute), ...wait.metadata };
+      const raw = { ...await executeTerminalCall(t, { ...wait.args, signal: config.waitSignal, foregroundBudgetMs: config.foregroundBudgetMs }, async value => (await cwd(value)).absolute), ...wait.metadata };
+      const value = backgroundNotifications ? await backgroundNotifications.observe(raw) : raw;
       if (config.waitSignal?.aborted) value.serverRestarting = true;
       return result(completions ? completions.observe(value, a.notifyOnCompletion, !!a.command?.trim()) : value);
     } catch (error) { return errorResult(error); }

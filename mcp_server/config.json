@@ -28,6 +28,19 @@
     "enableWrite": true,
     "enableTerminal": true
   },
+  "notifications": {
+    "botmux": {
+      "enabled": false,
+      "executable": "botmux",
+      "sessionId": "",
+      "mentionOpenId": "",
+      "minDurationMs": 300000,
+      "pollIntervalMs": 5000,
+      "sendTimeoutMs": 15000,
+      "retryDelayMs": 30000,
+      "maxAttempts": 5
+    }
+  },
   "files": {
     "maxBytes": 4194304,
     "directMaxBytes": 1048576

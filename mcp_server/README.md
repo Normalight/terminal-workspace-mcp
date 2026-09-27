@@ -2,7 +2,7 @@
 
 [Public repository](https://github.com/Normalight/terminal-workspace-mcp) · [MIT license](LICENSE) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
-A personal remote terminal for the account running the server. Release 0.5.5 exposes two tools by default:
+A personal remote terminal for the account running the server. Release 0.5.6 exposes two tools by default:
 
 - `execute_command`: shell commands, persistent tmux sessions, interactive input, and output polling.
 - `get_file`: original files and images, with resumable chunks for large files.
@@ -334,3 +334,38 @@ if (state.monitoringStopped) {
 ```
 
 `monitorUntilYield` acknowledges `onPage` before returning its checkpoint, or retains the caller's cursor when using status-only reads. Existing `waitForCompletion` intentionally remains continuous monitoring for automation; it ignores defer advice by default. Deferred output is still subject to configured log retention: use durable artifact/log files for long tasks whose full output must survive without a reader. Notifications require a live listening client and do not schedule a later model turn.
+
+
+### Optional botmux completion notifications
+
+`notifications.botmux.enabled` is false by default. Enabling it adds a durable background watcher to the standalone service; it does not require a model turn, an open MCP client, or a botmux scheduling prompt. The service checks persisted command state and calls the installed `botmux send` CLI on eligible completion. It does not import botmux packages or inherit interactive `BOTMUX_*` routing. With the integration disabled, botmux need not be installed.
+
+Configure this in the private `config.local.json` overlay:
+
+```json
+{
+  "notifications": {
+    "botmux": {
+      "enabled": true,
+      "executable": "/absolute/path/to/botmux",
+      "sessionId": "11111111-1111-4111-8111-111111111111",
+      "mentionOpenId": "ou_RECIPIENT",
+      "minDurationMs": 300000,
+      "pollIntervalMs": 5000,
+      "sendTimeoutMs": 15000,
+      "retryDelayMs": 30000,
+      "maxAttempts": 5
+    }
+  }
+}
+```
+
+Use a real authorized botmux session and recipient; empty `mentionOpenId` explicitly sends without mentioning anyone. A supervised process needs an executable reachable through its configured path and a botmux installation that permits that fixed route. No agent credentials or turn identity are copied into the service. Environment overrides are `MCP_BOTMUX_ENABLED`, `MCP_BOTMUX_EXECUTABLE`, `MCP_BOTMUX_SESSION_ID`, `MCP_BOTMUX_MENTION_OPEN_ID`, `MCP_BOTMUX_MIN_DURATION_MS`, `MCP_BOTMUX_POLL_INTERVAL_MS`, `MCP_BOTMUX_SEND_TIMEOUT_MS`, `MCP_BOTMUX_RETRY_DELAY_MS`, and `MCP_BOTMUX_MAX_ATTEMPTS`. Supervised deployment uses the configuration overlay; restart the server to apply changes.
+
+Running tracked terminal calls register once and return `externalNotification` with the provider, registration/delivery state and threshold. The watcher sends for success, failure, or attention states that meet the duration threshold. Short completed tasks and previously completed history are not backfilled. The threshold uses the actual start/finish times, so downtime cannot turn a short command into a long one. If the finish timestamp is unavailable, a previously observed long running interval can establish a lower bound; otherwise duration stays uncertain and no completion is invented.
+
+Records live under `paths.service/botmux-notifications`. Each record pins its original destination and threshold. Clients/restarts do not replace them; config changes apply to new registrations. Disable the integration to suspend all checks/sends, retaining records for a later re-enable. Completed records remain as deduplication tombstones. `/healthz.backgroundNotifications` reports record counts and a safe last error code. `failed` and `uncertain` need operator inspection; this release does not automatically resend uncertain records.
+
+Reported CLI failures use bounded backoff; missing binaries do not stop commands. A send in progress during a crash, a timeout, or an absent success receipt is marked uncertain rather than blindly replayed. This cannot guarantee exactly-once delivery across external transport failures. Messages contain status, exit code, runtime, output status and saved task IDs, without command text or terminal output. Use the IDs to retrieve artifacts; notifications do not wake a ChatGPT turn. The watcher resumes only when the MCP service is running. Its file lock also coordinates multiple local MCP processes sharing a notification directory.
+
+Tests disable notification routing by default; integration tests explicitly use isolated fake botmux executables.

@@ -22,6 +22,8 @@ import { terminalDescription } from "./terminal-tool.mjs";
 import { loadConfig } from "./config.mjs";
 import { ServerLifecycle, restartingCode, rejectedRecovery } from './server-lifecycle.mjs';
 import { requestAudit } from './request-audit.mjs';
+import { BotmuxCompletionWatcher } from './botmux-completion-watcher.mjs';
+import path from 'node:path';
 
 const deployment = loadConfig(process.env.MCP_ISOLATED_SERVICE === '1' ? { env: { MCP_CONFIG_FILE: process.env.MCP_CONFIG_FILE } } : undefined);
 const settings = deployment.config;
@@ -48,6 +50,8 @@ const logsConfig = settings.logs;
 const jobManager = await new JobManager({ root: jobRoot, shell: settings.terminal.shell, maxJobs: settings.jobs.maxCount, maxRunning: settings.jobs.maxRunning, retentionDays: settings.jobs.retentionDays, ...logsConfig }).initialize();
 const localExecutor = new LocalCommandExecutor({ jobManager, maxTimeoutMs: settings.terminal.maxWaitMs, maxOutputBytes: settings.terminal.maxOutputBytes });
 const terminalManager = await new TerminalManager({ root: settings.paths.terminals, env: childEnv, maxSessions: settings.terminal.maxSessions, ...logsConfig }).initialize();
+const backgroundNotifications = await new BotmuxCompletionWatcher({ config: settings.notifications.botmux,
+  root: path.join(settings.paths.service, 'botmux-notifications'), terminals: terminalManager, env: childEnv, cwd: workspace.root }).initialize();
 const terminalAdmin = new TerminalAdmin(terminalManager);
 let terminalGcRunning = false;
 const terminalGcTimer = setInterval(async () => {
@@ -62,7 +66,7 @@ const terminalGcTimer = setInterval(async () => {
 terminalGcTimer.unref();
 let revision = "unknown";
 try { revision = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8", timeout: 2000 }).trim(); } catch {}
-const version = "0.5.5";
+const version = "0.5.6";
 const maxSessions = settings.http.sessions.max;
 let toolCount = 0;
 const startedAt = Date.now();
@@ -118,7 +122,7 @@ export function createMcpServer() {
     },
   });
   server.server.onclose = () => completions.close();
-  registerTools(server, { workspace, executor: localExecutor, jobs: jobManager, terminals: terminalManager, completions,
+  registerTools(server, { workspace, executor: localExecutor, jobs: jobManager, terminals: terminalManager, completions, backgroundNotifications,
     config: { enableTerminal, enableWrite, directFileMaxBytes, childEnv, version, toolProfile, waitSignal: lifecycle.signal, foregroundBudgetMs: settings.terminal.foregroundBudgetMs },
     diagnostics: async () => ({ version, revision, toolCount, toolProfile, workspace: workspace.root, writesEnabled: enableWrite, terminalEnabled: enableTerminal, sessions: sessionStats(), counters: runtimeCounters, auditDropped, jobs: await jobManager.list({ limit: 10 }), limits: { maxSessions, directFileMaxBytes, ...logsConfig } }),
   });
@@ -351,6 +355,7 @@ if (!noHttp) {
         compression: compressionConfig,
         httpSessions: settings.http.sessions,
         httpResponsePolicy: { maxToolWaitMs: settings.http.maxToolWaitMs, closeFiniteConnections: settings.http.closeFiniteConnections },
+        backgroundNotifications: backgroundNotifications.summary(),
         configFile: deployment.configFile,
         workspace: workspace.root,
         writesEnabled: enableWrite,
@@ -409,7 +414,9 @@ if (!noHttp) {
     if (lifecycle.draining) return;
     clearInterval(terminalGcTimer);
     clearInterval(gcTimer);
-    const drained = await lifecycle.drain();
+    const draining = lifecycle.drain();
+    await backgroundNotifications.close();
+    const drained = await draining;
     await auditHttp({ event: 'service_draining', ...drained });
     for (const { transport } of sessions.values()) await transport.close().catch(() => {});
     auditWriter.end();
