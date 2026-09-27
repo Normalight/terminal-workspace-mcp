@@ -31,6 +31,18 @@ assert summary['requests']=={'POST tools/call 200':1}
 assert summary['retainedFrom']=='2026-09-26T15:00:00+00:00'
 assert summary['recentMetadata'][0]['durationMs']==30000
 assert 'private-' not in json.dumps(summary)
+cid='cmd_'+'a'*36
+base.write_text('\\n'.join(json.dumps(r) for r in [
+ {'timestamp':'2026-09-26T15:04:00Z','event':'tool_started','requestId':'correlated','toolName':'execute_command'},
+ {'timestamp':'2026-09-26T15:04:01Z','event':'http_aborted','requestId':'correlated','httpMethod':'POST','rpcMethod':'tools/call','responseFinished':False},
+ {'timestamp':'2026-09-26T15:04:02Z','event':'tool_result','requestId':'correlated','commandId':cid,'nextAction':'done','taskStatus':'succeeded','command':'private-command','stdout':'private-output'},
+ {'timestamp':'2026-09-26T15:04:03Z','event':'tool_result','requestId':'unrelated','commandId':'cmd_'+'b'*36,'nextAction':'poll'}
+])+'\\n')
+summary=d['audit_summary'](base,command_id=cid)
+assert summary['matchingRecords']==3 and summary['toolResults']==1
+assert summary['resultActions']=={'done':1}
+assert {r['requestId'] for r in summary['recentMetadata']}=={'correlated'}
+assert 'private-' not in json.dumps(summary)
 try: d['utc_time']('2026-09-26T15:00:00')
 except ValueError: pass
 else: raise AssertionError('ambiguous local time accepted')

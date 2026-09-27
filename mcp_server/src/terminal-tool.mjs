@@ -2,10 +2,20 @@ import { OperationError } from './runtime.mjs';
 import { activeStatus } from './terminal-output.mjs';
 import { foregroundInteraction, nextTerminalAction } from './terminal-interaction.mjs';
 
+async function interactionState(t, id, tracked, pid) {
+  if (tracked.executionStatus !== 'running') return {};
+  const detected = await foregroundInteraction(pid);
+  // The shell can return to its prompt while a result/output marker is being
+  // collected. Recheck execution before attributing that read to the command.
+  if (!detected || (await t.commandStatus(id, tracked.commandId)).executionStatus !== 'running') return {};
+  return detected.type === 'possible_terminal_input' ? { interactionHint: detected } : { interaction: detected };
+}
+
 // Pin the command before waiting. Another client may submit the next command
 // after completion; that must not change this call's identity or output scope.
 export async function executeTerminalCall(t, args, resolveCwd) {
   const a = args, began = Date.now();
+  if (a.statusOnly && (!a.commandId || a.command !== undefined || a.input !== undefined || a.key || a.outputScope === 'terminal')) throw new OperationError('statusOnly requires a saved commandId and a read without command/input/key', 'invalid_input');
   if (a.command?.trim() && a.outputScope === 'terminal') throw new OperationError('outputScope=terminal is for reads; command submission returns its command range', 'invalid_input');
   if (a.sessionId && a.terminalKey !== undefined) throw new OperationError('provide sessionId or terminalKey, not both', 'invalid_input');
   if (a.commandId && ((!a.sessionId && !a.terminalKey) || a.command !== undefined || a.input !== undefined || a.key)) throw new OperationError('commandId requires a saved selector and a read without command/input/key', 'invalid_input');
@@ -13,6 +23,15 @@ export async function executeTerminalCall(t, args, resolveCwd) {
   if (!a.sessionId && !a.terminalKey && !a.command?.trim()) throw new OperationError('provide command for a new session, or sessionId/terminalKey to resume', 'invalid_input');
   const opened = a.sessionId ? null : await t.open({ terminalKey: a.terminalKey, createIfMissing: !!a.command?.trim(), resolveCwd: () => resolveCwd(a.cwd) });
   const id = a.sessionId ?? opened.sessionId;
+  if (a.statusOnly) {
+    await t.touch(id);
+    const tracked = await t.commandStatus(id, a.commandId), state = await t.status(id);
+    const interaction = await interactionState(t, id, tracked, state.pid);
+    const { commandId, status, executionStatus, outputStatus, exitCode, startedAt, finishedAt, outputEndCursor } = tracked;
+    const value = { sessionId: id, commandId, status, executionStatus, outputStatus, exitCode, startedAt, finishedAt, outputEndCursor,
+      outputRead: false, ...interaction, durationMs: Date.now() - began };
+    return { ...value, nextAction: nextTerminalAction(value) };
+  }
   let tracked, page;
   if (a.command?.trim()) {
     const { output, ...state } = await t.execute(id, a); tracked = state; page = output;
@@ -28,15 +47,15 @@ export async function executeTerminalCall(t, args, resolveCwd) {
     }
   }
   const state = await t.status(id);
-  const interaction = activeStatus(tracked.status) ? await foregroundInteraction(state.pid) : null;
+  const interaction = await interactionState(t, id, tracked, state.pid);
   const value = { ...tracked, sessionId: id, ...(state.terminalKey ? { terminalKey: state.terminalKey } : {}),
     terminalReused: opened?.reused ?? true, ...(opened?.replacedSessionId ? { replacedSessionId: opened.replacedSessionId } : {}),
-    cwd: tracked.cwd ?? state.cwd, stdout: page.content, stderr: '', nextCursor: page.nextCursor, endCursor: page.endCursor,
+    cwd: tracked.cwd ?? state.cwd, stdout: page.content, stderr: '', outputRead: true, nextCursor: page.nextCursor, endCursor: page.endCursor,
     requestedCursor: page.requestedCursor, earliestCursor: page.earliestCursor, droppedBytes: page.droppedBytes,
     outputTruncated: page.truncated, outputScope: page.outputScope, outputFormat: page.outputFormat,
     outputGap: page.outputGap, outputComplete: page.outputComplete, waitingExpired: activeStatus(tracked.status),
-    ...(interaction ? { interaction } : {}), durationMs: Date.now() - began };
+    ...interaction, durationMs: Date.now() - began };
   return { ...value, nextAction: nextTerminalAction(value) };
 }
 
-export const terminalDescription = 'Execute shell commands in persistent tmux. Choose a stable terminalKey=project/agent/task before the first submission; it locates a shell, not a deduplicated command. Different agents/tasks should use distinct keys. Save sessionId, commandId and nextCursor. Start once; after a lost reply inspect the saved key without command before deciding anything. Poll with sessionId, commandId, cursor=nextCursor, waitMs=10000 (up to 30000), no command. Tracked output defaults to this command\'s byte range; omitted cursor starts at its beginning. outputScope=terminal reads the shared PTY stream (omitted cursor tails it). PTY merges stdout/stderr and may include interactive echo, ANSI and concurrent background output; use dedicated files for exact process output. Follow nextAction: poll for running work, read_output for remaining pages, input for a pager, inspect for uncertain execution or missing output, done to stop polling. A final status ends execution; outputGap will not heal by polling. New shells disable automatic pagers. waitMs/maxBytes limit the reply, never the process. Existing shells preserve cwd/env; cwd applies only on creation. Closed keys are replaced only by new commands, returning replacedSessionId; initialize their cwd/env again. A shell accepts one active tracked command; concurrent readers have independent cursors. Use input for prompts or key=C-c to interrupt. Running commands subscribe to notifications/message (logger=terminal-workspace.completion); when completionNotification.listening=false, keep polling. Notifications require an active host and do not start another model turn. Re-subscribe with saved IDs and notifyOnCompletion=true after reconnect. HTTP MCP-Session-Id is separate from terminal sessionId; origin session 404 needs a fresh initialize. During planned updates serverRestarting=true returns saved task state early; reconnect and read those IDs without command. submission_uncertain/unknown require inspection, not replay. Use shell for files/search/Git and get_file for artifacts. Inspect managed sessions with node "$MCP_TERMINAL_ADMIN" list; command=exit ends a finished shell after checking background jobs.';
+export const terminalDescription = 'Execute shell commands in persistent tmux. Choose a stable terminalKey=project/agent/task before the first submission; it locates a shell, not a deduplicated command. Different agents/tasks should use distinct keys. Save sessionId, commandId and nextCursor. Start once; after a lost reply inspect the saved key without command before deciding anything. Poll with sessionId, commandId, cursor=nextCursor, waitMs=10000 (up to 30000), no command. Tracked output defaults to this command\'s byte range; omitted cursor starts at its beginning. outputScope=terminal reads the shared PTY stream (omitted cursor tails it). PTY merges stdout/stderr and may include interactive echo, ANSI and concurrent background output; use dedicated files for exact process output. Follow nextAction: poll for running work, read_output for remaining pages, input for a terminal prompt, inspect for uncertain execution or missing output, done to stop polling. statusOnly=true polls saved command state without output; read_output then drains it. A final status ends execution; outputGap will not heal by polling. New shells disable automatic pagers. waitMs/maxBytes limit the reply, never the process. Existing shells preserve cwd/env; cwd applies only on creation. Closed keys are replaced only by new commands, returning replacedSessionId; initialize their cwd/env again. A shell accepts one active tracked command; concurrent readers have independent cursors. Use input for prompts or key=C-c to interrupt. Running commands subscribe to notifications/message (logger=terminal-workspace.completion); when completionNotification.listening=false, keep polling. Notifications require an active host and do not start another model turn. Re-subscribe with saved IDs and notifyOnCompletion=true after reconnect. HTTP MCP-Session-Id is separate from terminal sessionId; origin session 404 needs a fresh initialize. During planned updates serverRestarting=true returns saved task state early; reconnect and read those IDs without command. submission_uncertain/unknown require inspection, not replay. Use shell for files/search/Git and get_file for artifacts. Inspect managed sessions with node "$MCP_TERMINAL_ADMIN" list; command=exit ends a finished shell after checking background jobs.';

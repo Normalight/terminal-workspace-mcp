@@ -27,13 +27,13 @@ export async function serverFixture() {
     }
     throw Error(stderr);
   }
-  async function stop() { if (proc?.exitCode === null) { proc.kill('SIGTERM'); await exited; } }
+  async function stop(signal = 'SIGTERM') { if (proc?.exitCode === null) { proc.kill(signal); await exited; } }
   const client = options => {
     const c = new ReconnectingTerminalClient({ url, requestInit: { headers: { Authorization: `Bearer ${token}` } },
       baseDelayMs: 10, maxDelayMs: 30, reconcileMs: 100, requestTimeoutMs: 3000, ...options });
     clients.push(c); return c;
   };
-  return { ...f, env, url, token, start, stop, manager, client, cleanup: async () => {
+  return { ...f, env, url, token, start, stop, manager, client, get pid() { return proc?.pid; }, cleanup: async () => {
     for (const c of clients) await c.close(); await stop();
     for (const state of await manager.list()) await manager.close(state.sessionId).catch(() => {});
     await manager.run(['kill-server']).catch(() => {}); await f.cleanup();

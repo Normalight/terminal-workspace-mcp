@@ -18,7 +18,7 @@ def utc_time(value):
     except (ValueError, TypeError, AttributeError) as exc:
         raise ValueError('use an ISO timestamp with Z or a timezone offset') from exc
 
-def audit_summary(log, since=None, until=None):
+def audit_summary(log, since=None, until=None, command_id=None):
     """Summarize retained metadata, including requests overlapping the window."""
     files = sorted([p for p in log.parent.glob(log.name + '*')
                     if p.name == log.name or re.fullmatch(re.escape(log.name) + r'\.\d{9}', p.name)])
@@ -26,7 +26,10 @@ def audit_summary(log, since=None, until=None):
     malformed = 0
     first = last = None
     fields = ['timestamp', 'event', 'requestId', 'httpMethod', 'rpcMethod', 'toolName', 'session',
-              'statusCode', 'durationMs', 'requestBytes', 'responseBytes', 'responseFinished']
+              'statusCode', 'durationMs', 'requestBytes', 'responseBytes', 'responseFinished',
+              'taskSessionId', 'commandId', 'taskStatus', 'executionStatus', 'outputStatus', 'nextAction',
+              'exitCode', 'nextCursor', 'outputEndCursor', 'outputRead', 'outputGap', 'outputComplete',
+              'outputTruncated', 'callKind', 'toolError', 'errorCode', 'toolDurationMs']
     for file in files:
         try:
             with file.open(errors='replace') as source:
@@ -47,8 +50,17 @@ def audit_summary(log, since=None, until=None):
                     rows.append({key: row[key] for key in fields if key in row})
         except FileNotFoundError:
             continue  # Retention can remove a segment during a snapshot.
-    calls = [r for r in rows if r.get('rpcMethod') == 'tools/call']
+    if command_id:
+        ids = {r.get('requestId') for r in rows if r.get('commandId') == command_id}
+        ids.discard(None)
+        rows = [r for r in rows if r.get('commandId') == command_id or r.get('requestId') in ids]
+        events = collections.Counter(r['event'] for r in rows if r.get('event'))
+        statuses = collections.Counter(f"{r['httpMethod']} {r.get('rpcMethod') or '-'} {r.get('statusCode') or 'no_response'}" for r in rows if r.get('httpMethod'))
+    calls = [r for r in rows if r.get('rpcMethod') == 'tools/call' and r.get('httpMethod')]
+    results = [r for r in rows if r.get('event') == 'tool_result']
     return {'scope': 'retained HTTP metadata; HTTP 200 does not prove tool success or browser receipt',
+            'commandId': command_id, 'toolResults': len(results),
+            'resultActions': dict(collections.Counter(r.get('nextAction', 'unspecified') for r in results)),
             'since': since.isoformat() if since else None, 'until': until.isoformat() if until else None,
             'retainedFrom': first.isoformat() if first else None, 'retainedThrough': last.isoformat() if last else None,
             'files': len(files), 'malformedLines': malformed, 'matchingRecords': len(rows),
@@ -81,7 +93,7 @@ def fetch(url):
     except Exception as exc:
         return {'error_type': type(exc).__name__, 'text': ''}
 
-def snapshot(out, loaded, since=None, until=None):
+def snapshot(out, loaded, since=None, until=None, command_id=None):
     ROOT = Path(loaded['config']['workspaceRoot'])
     tunnel = loaded['config']['diagnostics']['tunnelUrl'].rstrip('/')
     out = out.resolve()
@@ -104,7 +116,7 @@ def snapshot(out, loaded, since=None, until=None):
         if name.startswith(('http_client_request_body_size_bytes_', 'http_client_request_duration_seconds_', 'command_end_to_end_latency_milliseconds_', 'commands_poll_latency_seconds_')) or name in ['commands_poll_cycles_total','commands_poll_errors_total','commands_poll_last_successful_timestamp_seconds','commands_queue_length','commands_queue_capacity','dispatcher_worker_pool_occupancy','dispatcher_worker_pool_capacity','process_start_time_seconds','process_resident_memory_bytes']:
             metrics.append({'name':name,'labels':labels,'value':float(value)})
     data['metrics'] = metrics
-    data['httpAudit'] = audit_summary(Path(loaded['config']['paths']['audit']), since, until)
+    data['httpAudit'] = audit_summary(Path(loaded['config']['paths']['audit']), since, until, command_id)
     log = Path(loaded['config']['paths']['service'])/'server.stderr.log'
     if log.is_file():
         lines=log.read_text(errors='replace').splitlines();events=[]
@@ -125,9 +137,11 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--config');parser.add_argument('--output')
     parser.add_argument('--since', type=utc_time, help='incident window start, ISO timestamp with timezone')
     parser.add_argument('--until', type=utc_time, help='incident window end; tunnel counters remain cumulative')
+    parser.add_argument('--command-id', help='correlate one command and its HTTP request IDs')
     args=parser.parse_args()
+    if args.command_id and not re.fullmatch(r'cmd_[a-f0-9-]{36}', args.command_id): parser.error('invalid --command-id')
     if args.since and args.until and args.since > args.until: parser.error('--since must not follow --until')
     command=[shutil.which('node') or 'node',str(SOURCE_ROOT/'mcp_server/scripts/config.mjs'),'show']
     if args.config:command.extend(['--config',args.config])
     loaded=json.loads(subprocess.run(command,check=True,capture_output=True,text=True).stdout)
-    snapshot(Path(args.output or Path(loaded['config']['workspaceRoot'])/'outputs/mcp-diagnostics'),loaded,args.since,args.until)
+    snapshot(Path(args.output or Path(loaded['config']['workspaceRoot'])/'outputs/mcp-diagnostics'),loaded,args.since,args.until,args.command_id)

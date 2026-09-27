@@ -132,6 +132,12 @@ test('aborted response is audited and the command continues to its durable resul
     const final = await f.client().waitForCompletion({ sessionId: state.sessionId, commandId: state.activeCommandId, cursor: 0 });
     assert.match(final.stdout, /AFTER_ABORT/); assert.equal(final.exitCode, 0);
     assert.equal(await readFile(path.join(f.root, 'once'), 'utf8'), 'x');
+    let produced;
+    for (let i = 0; i < 100; i++) {
+      produced = (await readFile(f.env.MCP_HTTP_AUDIT_LOG, 'utf8')).trim().split('\n').map(JSON.parse).find(x => x.event === 'tool_result' && x.requestId === audit.requestId);
+      if (produced) break; await delay(20);
+    }
+    assert.equal(produced?.commandId, final.commandId); assert.equal(produced?.taskStatus, 'succeeded');
   } finally { await f.cleanup(); }
 });
 

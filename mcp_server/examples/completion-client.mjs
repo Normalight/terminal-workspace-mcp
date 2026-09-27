@@ -36,13 +36,8 @@ async function consume(page) {
 }
 async function finish() {
   const target = { sessionId: state.sessionId, commandId: state.commandId, cursor: state.cursor };
-  const final = await client.waitForCompletion(target);
+  const final = await client.waitForCompletion(target, { onPage: consume });
   console.error(JSON.stringify({ commandId: state.commandId, status: final.status, exitCode: final.exitCode }));
-  for (;;) {
-    const page = await client.read({ ...target, cursor: state.cursor, waitMs: 0 });
-    await consume(page);
-    if (!page.outputTruncated) break;
-  }
   state.phase = state.outputGap || !state.outputComplete ? 'incomplete' : 'complete'; await save();
   if (final.exitCode !== 0 || state.phase !== 'complete') process.exitCode = 1;
 }

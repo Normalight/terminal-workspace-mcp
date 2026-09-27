@@ -2,7 +2,7 @@
 
 [Public repository](https://github.com/Normalight/terminal-workspace-mcp) · [MIT license](LICENSE) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
-A personal remote terminal for the account running the server. Release 0.5.2 exposes two tools by default:
+A personal remote terminal for the account running the server. Release 0.5.3 exposes two tools by default:
 
 - `execute_command`: shell commands, persistent tmux sessions, interactive input, and output polling.
 - `get_file`: original files and images, with resumable chunks for large files.
@@ -170,11 +170,11 @@ The notification carries status and identifiers; retrieve output using `execute_
 - **Server lifecycle:** a demand-started monitor checks subscribed commands about every 500 ms while a listener exists. Terminal completion uses the persisted output-drain acknowledgement. Completed states are cached during retries. The monitor stops when empty or when the MCP session closes; active SSE listeners are protected from idle session GC. SSE is uncompressed, with SDK keep-alives and proxy-buffering disabled. No commands or output are included in notification payloads.
 - **Fallback:** a client must handle events to act on them. Receiving a notification does not itself wake an offline application or schedule another model turn. If the host does not expose notification handlers, continue polling with `{sessionId, cursor: nextCursor, waitMs: 10000}` (up to 30000 ms). Waiting expiry, output truncation and a dropped connection do not stop execution. Always verify the final status/exit code and read remaining output before reporting completion.
 
-Every terminal reply includes `nextAction`: `poll` for active work, `read_output` for another page, `input` for a detected foreground pager, `inspect` for uncertain execution or missing output, and `done` to stop polling. Preserve `commandId` as well as `sessionId` and `nextCursor` for subsequent reads. A final execution status with an output gap requires reporting that gap, not waiting for it to disappear. Text-only clients receive the same bounded JSON result, including status and output, as `structuredContent` even above 4 KiB.
+Every terminal reply includes `nextAction`: `poll` for active work, `read_output` for another page, `input` for confirmed terminal input, `inspect` for uncertain execution or missing output, and `done` to stop polling. Preserve `commandId` as well as `sessionId` and `nextCursor` for subsequent reads. A final execution status with an output gap requires reporting that gap, not waiting for it to disappear. Text-only clients receive the same bounded JSON result, including status and output, as `structuredContent` even above 4 KiB.
 
 New shells default `PAGER`, `GIT_PAGER` and `SYSTEMD_PAGER` to `cat`; explicit per-shell environment overrides remain supported. Existing shells retain their environment, so use `git --no-pager` for status queries there. If a command explicitly starts `less` or another detected pager, `interaction` explains that it is waiting for input. Read what is needed, then send `input:"q"` deliberately. A still-open pager means the command has not finished. The SDK completion helper reports `interaction_required` with saved state instead of waiting forever.
 
-When a running reply reports `completionNotification.listening:false`, it also provides `fallback:"poll"` and `reason:"no_listener"`. A subscription alone cannot deliver a notification. The SDK helper reconciles every second without a listener; with a listener its normal bounded reconciliation remains active.
+When a running reply reports `completionNotification.listening:false`, it also provides `fallback:"poll"` and `reason:"no_listener"`. A subscription alone cannot deliver a notification. The SDK helper reconciles every second without a listener. Incremental consumers reconcile at least every second by default even with a listener, since completion notifications alone cannot protect unread output from retention.
 
 A runnable SDK example is [examples/completion-client.mjs](examples/completion-client.mjs). It listens for pushed completion, reconciles persisted task status every 30 seconds if no event arrives, and fetches remaining output:
 
@@ -182,7 +182,7 @@ A runnable SDK example is [examples/completion-client.mjs](examples/completion-c
 node mcp_server/examples/completion-client.mjs 'sleep 5; printf first' 'sleep 2; printf second'
 ```
 
-It uses the configured local HTTP endpoint and authentication; set `MCP_NOTIFICATION_URL` to exercise a relay/tunnel endpoint instead. Before submitting, it writes a private checkpoint under `outputs/mcp-client-state/` containing its stable task key. It then saves the returned task IDs and consumed output cursor. If the client process exits, use the printed checkpoint path:
+It uses the configured local HTTP endpoint and authentication; set `MCP_NOTIFICATION_URL` to exercise a relay/tunnel endpoint instead. Before submitting, it writes a private checkpoint under `outputs/mcp-client-state/` containing its stable task key. It then saves the returned task IDs and consumes output incrementally while the task runs, saving each consumed cursor before proceeding. A crash between output delivery and checkpoint persistence can repeat a page; it does not replay the command. If the client process exits, use the printed checkpoint path:
 
 ```bash
 node mcp_server/examples/completion-client.mjs --resume /absolute/workspace/outputs/mcp-client-state/<id>.json
@@ -287,3 +287,22 @@ node mcp_server/scripts/measure_tools.mjs
 ```
 
 Tests also cover command-history boundaries, unsent versus uncertain dispatch, collector death, retained/missing log gaps, file versions, client cancellation/deadlines, origin-only submission retry, six concurrent clients and independent service definitions. Tests cover configuration precedence, relocated workspace/ports, plugin generation, service/relay startup, the two-tool interface, tmux state and prompts, Ctrl+C, output pagination, process deadlines, cancellation, spawn failure, UTF-8, log rotation, absolute paths, chunks, concurrent edits, search cancellation, HTTP errors, authentication, compression negotiation/integrity, and recovery across a server restart. Tests use isolated workspace-local state and remove their own processes and fixtures. Tool footprint measurement reports serialized definition bytes, not model token counts.
+
+
+### Incremental monitoring and metadata queries
+
+Use `client.waitForCompletion(savedIDs, { onPage: async (page, checkpoint) => { /* consume page.stdout and persist checkpoint */ } })` for long-running output. The awaited consumer provides backpressure; its failure stops monitoring with the last acknowledged cursor in `error.recovery`. `pollIntervalMs` defaults to 1000; `timeoutMs` bounds monitoring without cancelling execution. Retention gaps remain explicit. Save IDs before submission and preserve any previously observed gap in your persistent checkpoint.
+
+Without `onPage`, the helper polls with `statusOnly:true` and reads one output page after execution ends; it does not consume all output. Applications expecting large output should supply a consumer. Metadata reads require a saved `commandId`, return `outputRead:false`, omit stdout and nextCursor, and never advance the caller's output position. A completed metadata response uses `nextAction:read_output` so that callers subsequently drain output; only a full output read can establish `outputComplete`.
+
+Confirmed terminal reads return `interaction.type:terminal_input`; pagers remain supported. If Linux restricts `/proc/<pid>/syscall`, an I/O wait with terminal stdin can return `interactionHint.type:possible_terminal_input`. This hint also fits some normal I/O waits: it does not change the task to failed, require input, or stop the SDK monitor. Inspect recent output; silence alone is never proof of failure. No keys or signals are sent automatically.
+
+### Correlating a pending call
+
+HTTP responses carry `x-request-id`; tool JSON results carry `requestId`. Audit `tool_started` and `tool_result` events share that ID with HTTP completion or abortion records. The allowlist includes task IDs, call kind, status, nextAction, cursor, tool error and duration; command text, output, task labels, paths and authentication are omitted. A tool result produced after HTTP abortion is recorded separately. Successful local HTTP delivery still does not prove browser receipt.
+
+Add `--command-id cmd_...` to `diagnose_transport.py` to retain that command's records and linked requests, including requests that aborted before an ID was returned. Combine with `--since`/`--until`; retained log segments bound available evidence.
+
+### Concurrent soak
+
+Run `node mcp_server/scripts/soak_terminal.mjs 600000 6` from the repository root for a ten-minute, six-client isolated HTTP test. It uses its own fixture, terminals and credentials, with half the clients lacking SSE, injected transient read failures, one graceful restart and one forced server exit. It checks every output sequence, incremental checkpoints, retained-log rotation, final state and one command side effect per task, and records RSS/session/file-descriptor samples. It cleans up its own services and terminals. This does not exercise a browser, production tunnel, machine reboot or 24-hour operation.

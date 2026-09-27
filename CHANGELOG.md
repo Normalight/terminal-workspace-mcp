@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.3 — 2026-09-27
+
+- Stream bounded output pages through an awaited SDK consumer and advance checkpoints only after consumption; status-only waits avoid retransmitting logs.
+- Add statusOnly reads with explicit outputRead=false and a separate output-drain action; no output cursor is advanced by a metadata query.
+- Correlate tool start/result and HTTP delivery records by request ID and saved command IDs, with allowlisted status metadata and command-filtered diagnostics.
+- Detect observable terminal stdin reads and distinguish uncertain I/O hints on restricted kernels from confirmed interactive input.
+- Add retention/reconnect, consumer-failure, concurrent-audit and silent/input-wait regressions, plus an isolated configurable concurrent soak with fault injection.
+
 ## 0.5.2 — 2026-09-27
 
 - Preserve full bounded results in TextContent as well as structuredContent, including final status and cursors for replies above 4 KiB.

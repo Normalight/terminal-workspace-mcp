@@ -21,6 +21,7 @@ import { serviceLogging } from "./service-logging.mjs";
 import { terminalDescription } from "./terminal-tool.mjs";
 import { loadConfig } from "./config.mjs";
 import { ServerLifecycle, restartingCode, rejectedRecovery } from './server-lifecycle.mjs';
+import { requestAudit } from './request-audit.mjs';
 
 const deployment = loadConfig(process.env.MCP_ISOLATED_SERVICE === '1' ? { env: { MCP_CONFIG_FILE: process.env.MCP_CONFIG_FILE } } : undefined);
 const settings = deployment.config;
@@ -61,7 +62,7 @@ const terminalGcTimer = setInterval(async () => {
 terminalGcTimer.unref();
 let revision = "unknown";
 try { revision = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8", timeout: 2000 }).trim(); } catch {}
-const version = "0.5.2";
+const version = "0.5.3";
 const maxSessions = settings.http.sessions.max;
 let toolCount = 0;
 const startedAt = Date.now();
@@ -165,6 +166,8 @@ async function readBody(req) {
 async function handleMcp(req, res) {
   if (req.method !== 'GET') lifecycle.track(res);
   const requestId = randomUUID();
+  const auditContext = { requestId, emit: entry => { void auditHttp(entry); }, tool: {} };
+  res.setHeader('x-request-id', requestId);
   const began = Date.now();
   runtimeCounters.httpRequests += 1;
   const sessionId = req.headers["mcp-session-id"];
@@ -207,6 +210,8 @@ async function handleMcp(req, res) {
       durationMs: Date.now() - began,
       requestBytes,
       responseBytes,
+      responseFinished: true,
+      ...auditContext.tool,
       ...(res.compressionStats ? { compression: res.compressionStats } : {}),
     });
   });
@@ -216,7 +221,7 @@ async function handleMcp(req, res) {
     // A missing reply does not establish that a tools/call never executed.
     void auditHttp({ event: req.method === 'GET' ? 'sse_disconnected' : 'http_aborted', requestId, httpMethod: req.method,
       rpcMethod: methodName, toolName, session: hashedSession,
-      statusCode: null, responseFinished: false, durationMs: Date.now() - began, requestBytes, responseBytes });
+      statusCode: null, responseFinished: false, durationMs: Date.now() - began, requestBytes, responseBytes, ...auditContext.tool });
   });
 
   if (!authorized(req)) {
@@ -292,7 +297,7 @@ async function handleMcp(req, res) {
     session.lastActiveAt = Date.now();
     session.inflight = (session.inflight ?? 0) + 1;
     try {
-      await session.transport.handleNodeRequest(req, res, body);
+      await requestAudit.run(auditContext, () => session.transport.handleNodeRequest(req, res, body));
     } catch (error) {
       if (!res.headersSent) sendJson(res, 500, { error: "MCP request failed" });
       console.error(error);

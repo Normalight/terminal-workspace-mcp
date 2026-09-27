@@ -1,6 +1,6 @@
 {
   "name": "terminal-workspace-mcp",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "private": true,
   "type": "module",
   "description": "Personal remote terminal MCP with tmux sessions, durable jobs, and paged file transfers.",

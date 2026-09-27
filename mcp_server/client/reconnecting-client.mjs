@@ -1,8 +1,9 @@
 import { setTimeout as sleep } from 'node:timers/promises';
-import { abortable, combineSignals, recoveringFetch, requestContext, restartingRejection } from './request-policy.mjs';
+import { abortable, recoveringFetch, requestContext, restartingRejection } from './request-policy.mjs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { LoggingMessageNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
+import { monitorTerminal } from './terminal-monitor.mjs';
 
 export function retryable(error) {
   // Some hosts use -32001 for Unknown tool, while the SDK uses it for timeout.
@@ -130,35 +131,7 @@ export class ReconnectingTerminalClient {
     }, { retryIf: error => error.sessionExpired === true || error.submissionRejected === true });
   }
 
-  async waitForCompletion(args, { timeoutMs = 30 * 60 * 1000 } = {}) {
-    if (!args.sessionId || !args.commandId) throw TypeError('completion recovery requires saved sessionId and commandId');
-    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw TypeError('invalid timeoutMs');
-    const key = `${args.sessionId}:${args.commandId}`, deadline = Date.now() + timeoutMs;
-    const signal = combineSignals(this.lifecycle.signal, AbortSignal.timeout(timeoutMs));
-    for (;;) {
-      const state = await this.read({ ...args, waitMs: 0, notifyOnCompletion: true }, { signal });
-      if (state.status !== 'running' && state.status !== 'starting') { this.events.delete(key); return state; }
-      if (state.interaction?.type === 'pager') {
-        this.events.delete(key);
-        const error = new Error('Foreground pager needs input; inspect the task and dismiss the pager instead of polling.');
-        error.code = 'interaction_required'; error.state = state;
-        error.recovery = { sessionId: state.sessionId, commandId: state.commandId, cursor: state.nextCursor, waitMs: 0 };
-        throw error;
-      }
-      if (state.serverRestarting) { await sleep(1000, undefined, { signal }); continue; }
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) throw Error('Completion wait expired; retain IDs/cursor and resume without command.');
-      // Notifications wake promptly; bounded reconciliation also handles a lost
-      // final event or a transport that does not deliver notifications at all.
-      await new Promise(resolve => {
-        let timer;
-        const done = () => { clearTimeout(timer); this.waiters.delete(done); resolve(); };
-        const interval = state.completionNotification?.listening === false ? Math.min(this.reconcileMs, 1000) : this.reconcileMs;
-        this.waiters.add(done); timer = setTimeout(done, Math.min(interval, remaining));
-        if (this.events.has(key) || signal.aborted) done();
-      });
-    }
-  }
+  async waitForCompletion(args, options) { return monitorTerminal(this, args, options); }
   async close() {
     this.lifecycle.abort(); this.wake();
     if (this.connecting) await this.connecting.catch(() => {});

@@ -117,3 +117,12 @@ node mcp_server/scripts/measure_tools.mjs
 工具返回明确的 `nextAction`：`poll` 等待运行中的任务，`read_output` 读取剩余页，`input` 处理前台分页器，`inspect` 核查不明执行或输出缺口，`done` 停止轮询。任务终态与输出完整性分别判断；缺失输出不会通过重复轮询自动恢复。超过 4 KiB 的结果也会在文本区保留完整的有界 JSON（含状态、退出码、游标和输出），兼容只读取文本的客户端。
 
 新终端默认 `PAGER/GIT_PAGER/SYSTEMD_PAGER=cat`。旧终端保留原环境，应使用 `git --no-pager`；若检测到前台分页器，会返回 `interaction`，读完后显式发送 `input:"q"`。SDK 等待助手会抛出带原任务状态的 `interaction_required`，不继续空等。完成通知仍要求客户端实际保持监听；`listening:false` 会同时明确返回轮询兜底。
+
+
+## 增量监控和调用关联
+
+配套 SDK 的 `waitForCompletion` 支持异步 `onPage(page, checkpoint)`：运行期间持续读取有界输出页，消费者成功写出并保存断点后才推进游标。示例客户端默认使用此模式；写出后尚未保存断点就崩溃可能重复一页输出，但不会自动重放命令。不提供消费者时只轮询状态，结束后读取一页输出。
+
+`statusOnly:true` 要求固定 `commandId`，返回 `outputRead:false`，不携带 stdout 或推进游标；结束后按 `read_output` 获取剩余输出。输入等待可确认时返回 `interaction`；内核限制下仅提供 `interactionHint`，不会因正常 I/O 等待或长时间无输出而自动中止任务。
+
+结果中的 `requestId` 可关联 HTTP 审计与 `tool_started/tool_result`；诊断脚本新增 `--command-id`。日志只保留任务标识、状态、动作、耗时等元数据。持续并发测试入口为 `node mcp_server/scripts/soak_terminal.mjs 600000 6`，使用隔离服务，覆盖通知缺失、读请求故障、重启、日志轮转和完整结束；不代表网页或 24 小时稳定性验收。

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { executeTerminalCall, terminalDescription } from "./terminal-tool.mjs";
 import { OperationError, quote } from "./runtime.mjs";
+import { registerAuditedTool, requestAudit } from './request-audit.mjs';
 
 const readOnly = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
 const modifying = { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: false };
@@ -12,6 +13,7 @@ const terminalKey = string.regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,119}$/).optiona
 const commandId = string.regex(/^cmd_[a-f0-9-]{36}$/);
 const sessionId = string.regex(/^term_[a-f0-9-]{36}$/);
 export function result(value, summary) {
+  if (requestAudit.getStore()) value = { ...value, requestId: requestAudit.getStore().requestId };
   const serialized = JSON.stringify(value);
   // Some hosts consume only TextContent. Always preserve the bounded result,
   // including completion status and cursors, in that representation too.
@@ -19,7 +21,7 @@ export function result(value, summary) {
 }
 export function errorResult(error) {
   const code = typeof error?.code === "string" ? error.code : "operation_failed";
-  return { isError: true, content: [{ type: "text", text: JSON.stringify({ code, message: error?.message ?? String(error), ...(error?.recovery ? { recovery: error.recovery } : {}) }) }] };
+  return { isError: true, content: [{ type: "text", text: JSON.stringify({ code, message: error?.message ?? String(error), ...(requestAudit.getStore() ? { requestId: requestAudit.getStore().requestId } : {}), ...(error?.recovery ? { recovery: error.recovery } : {}) }) }] };
 }
 function readonlyCommand(command) {
   const parts = command.split(/\s+&&\s+/);
@@ -104,15 +106,15 @@ export function registerTools(server, { workspace: w, executor, jobs, terminals:
   register("close_terminal", "Close a managed tmux session and its shell. Logs remain available.", { sessionId }, terminal(a => t.close(a.sessionId)), modifying);
   register("server_diagnostics", "Show build revision, operation modes, limits, tool count, sessions and job summary.", {}, diagnostics);
   if (config.toolProfile === "legacy") {
-    for (const [name, { spec, callback }] of definitions) server.registerTool(name, spec, callback);
+    for (const [name, { spec, callback }] of definitions) registerAuditedTool(server, name, spec, callback);
     return;
   }
   const getFile = definitions.get("get_file");
-  server.registerTool("get_file", getFile.spec, getFile.callback);
-  server.registerTool("execute_command", {
+  registerAuditedTool(server, "get_file", getFile.spec, getFile.callback);
+  registerAuditedTool(server, "execute_command", {
     title: "Execute in persistent terminal",
     description: terminalDescription,
-    inputSchema: { outputScope: z.enum(["command", "terminal"]).optional().describe("Command byte range by default for tracked work; terminal selects shared PTY history."), command: string.max(20000).optional(), sessionId: sessionId.optional(), terminalKey, commandId: commandId.optional().describe("Read/subscribe to a specific saved command; requires sessionId or terminalKey and no command/input/key."), notifyOnCompletion, cwd: string.optional(), input: string.max(65536).optional(), key: z.enum(["C-c", "C-d", "C-z", "Enter", "Escape", "Tab"]).optional(), cursor: z.number().int().min(0).optional(), waitMs: z.number().int().min(0).max(30000).default(1000), maxBytes },
+    inputSchema: { statusOnly: z.boolean().optional().describe("Read saved command state without output or cursor advancement; requires commandId. Read output separately after completion."), outputScope: z.enum(["command", "terminal"]).optional().describe("Command byte range by default for tracked work; terminal selects shared PTY history."), command: string.max(20000).optional(), sessionId: sessionId.optional(), terminalKey, commandId: commandId.optional().describe("Read/subscribe to a specific saved command; requires sessionId or terminalKey and no command/input/key."), notifyOnCompletion, cwd: string.optional(), input: string.max(65536).optional(), key: z.enum(["C-c", "C-d", "C-z", "Enter", "Escape", "Tab"]).optional(), cursor: z.number().int().min(0).optional(), waitMs: z.number().int().min(0).max(30000).default(1000), maxBytes },
     outputSchema: object, annotations: modifying,
   }, async (a) => {
     try {
