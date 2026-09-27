@@ -4,7 +4,7 @@
 
 For ChatGPT setup, follow the **[Secure MCP Tunnel walkthrough](CHATGPT.md)** ([中文](CHATGPT.zh-CN.md)): create a tunnel, run the local client, then create a ChatGPT app with Connection set to Tunnel.
 
-A personal remote terminal for the account running the server. Release 0.5.7 exposes two tools by default:
+A personal remote terminal for the account running the server. Release 0.5.8 exposes two tools by default:
 
 - `execute_command`: shell commands, persistent tmux sessions, interactive input, and output polling.
 - `get_file`: original files and images, with resumable chunks for large files.

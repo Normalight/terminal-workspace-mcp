@@ -4,6 +4,7 @@ import path from 'node:path';
 import { atomicJson, atomicWrite, delay, integer, jsonFile, OperationError, processIdentity, quote } from './runtime.mjs';
 import { readLog } from './log-store.mjs';
 import { describeTask } from './task-summary.mjs';
+import { drainExitedPane } from './terminal-drain.mjs';
 import { activeStatus, blocksSubmission, readCommandOutput } from './terminal-output.mjs';
 import { checkSubmission } from './server-lifecycle.mjs';
 
@@ -87,14 +88,13 @@ export async function commandState(manager, id, commandId) {
   if (!COMMAND.test(commandId)) throw new OperationError('invalid command id', 'invalid_input');
   const base = path.join(manager.dir(id), 'commands', commandId);
   const meta = await jsonFile(base + '.json');
-  const [result, executed, started, startMarker, delivery, pane, session] = await Promise.all([
+  const [result, executed, started, startMarker, delivery, inspectedPane, session] = await Promise.all([
     jsonFile(base + '.result.json', null), jsonFile(base + '.executed.json', null), jsonFile(base + '.started.json', null),
     jsonFile(base + '.output-start.json', null), jsonFile(base + '.delivery.json', null), manager.pane(id), jsonFile(path.join(manager.dir(id), 'meta.json')),
   ]);
-  let drained = !pane.alive && session.outputProtocol >= 1 ? await jsonFile(path.join(manager.dir(id), 'log-drained.json'), null) : null;
-  if (!result && !pane.alive && session.outputProtocol >= 1 && !drained && pane.pid && pane.pipeActive) {
-    await manager.run(['if-shell', '-F', '-t', `${id}:0.0`, '#{pane_dead}', `pipe-pane -t '${id}:0.0'`]);
-  }
+  let drained = !inspectedPane.alive && session.outputProtocol >= 1 ? await jsonFile(path.join(manager.dir(id), 'log-drained.json'), null) : null;
+  const pane = session.outputProtocol >= 1 && !inspectedPane.alive
+    ? await drainExitedPane(manager, id, { ...inspectedPane, pipeActive: !result && !drained && inspectedPane.pipeActive }) : inspectedPane;
   const collector = await collectorState(manager, session, pane);
   // Closing pipe-pane can finish the logger between the preceding reads.
   if (!pane.alive && !drained) drained = await jsonFile(path.join(manager.dir(id), 'log-drained.json'), null);

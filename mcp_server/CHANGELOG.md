@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.8
+
+- Drain completed terminals on tmux versions that reject closing an exited pane pipe. Persist the exit receipt before retiring that dead pane, and preserve all buffered final output for later reads.
+- Cover the tmux rejection path with a large-output regression and retain the Node.js 22/24 CI matrix.
+
 ## 0.5.7
 
 - Make Secure MCP Tunnel the primary ChatGPT onboarding path in both READMEs; include credential setup, readiness checks, app form values and metadata refresh.
