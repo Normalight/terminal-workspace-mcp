@@ -84,13 +84,18 @@ test('terminal ownership, legacy recognition, previews and idle cleanup protect 
     assert.equal(byId.get(split).reason,'modified_layout');
     assert.equal(byId.get(attached).reason,'attached_client');
     const preview=await admin.cleanup({idleTtlMs:300000,now:future()});
-    assert.deepEqual(preview.candidates.sort(),[exited,idle,legacy].sort());
+    // tmux 3.4+ requires removing an exited pane to finish draining its pipe.
+    // Its retained record/log are already closed; only existing panes need GC.
+    const exitedPresent = !!(await t.pane(exited)).pid;
+    const expected = [idle,legacy,...(exitedPresent ? [exited] : [])].sort();
+    if (!exitedPresent) assert.equal(JSON.parse(await readFile(path.join(t.dir(exited),'pane-exit.json'),'utf8')).exitCode,0);
+    assert.deepEqual(preview.candidates.sort(),expected);
     assert(preview.dryRun);assert(await t.pane(idle).then(s=>s.alive));
     // Recent polling protects a session; use actual time to test the persisted activity.
     await t.read(idle,{waitMs:0});
     assert(!(await admin.cleanup({idleTtlMs:300000})).candidates.includes(idle));
     const result=await admin.cleanup({apply:true,idleTtlMs:300000,now:future()});
-    assert.deepEqual(result.removed.sort(),[exited,idle,legacy].sort());
+    assert.deepEqual(result.removed.sort(),expected);
     assert.equal((await t.pane(idle)).alive,false);
     assert((await t.pane(busy)).alive);assert((await t.pane(background)).alive);assert((await t.pane(foreign)).alive);
     assert.match((await t.read(exited,{cursor:0})).content,/preserved/);
