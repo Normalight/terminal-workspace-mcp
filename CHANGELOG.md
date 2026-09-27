@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.10
+
+- Lead monitoring topics with the user goal and expected deliverable, with explicit missing-purpose handling and improved submission guidance.
+- Add opt-in bounded command-output progress: structured MCP_PROGRESS reports, stage counters, recent log evidence, report age and output silence. Redact common credentials before forwarding.
+- Suppress unchanged progress until a configurable heartbeat while always reporting completion; keep evidence available when agent summaries time out.
+
 ## 0.5.9
 
 - Delegate long tasks to an optional botmux agent in a dedicated new topic, with periodic state summaries and explicit recipient mentions on start and completion. Persist task/topic/event routing across restarts.

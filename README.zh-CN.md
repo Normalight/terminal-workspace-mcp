@@ -147,3 +147,6 @@ HTTP 单次主动等待默认最多 5 秒，即使旧对话仍传入 30 秒，�
 可选的 `notifications.botmux` 默认关闭。设置 `mode: "task"`、`botAppId`、`chatId` 和 `mentionOpenId` 后，达到阈值的长任务会交给指定机器人，在目标群新建专属话题；开场 @ 用户、定期同步进度，完成或失败再 @ 用户。调用方预计耗时达到阈值时可提前交接。服务持久化任务、话题和待处理事件，重启继续原监听；机器人摘要超时则直接同步实测状态。配置示例与重试边界见[长任务监听配置](mcp_server/README.md#optional-botmux-task-monitoring)。终端执行仍独立于 botmux。
 
 提交时可传 `taskSummary`（1–240 字符）描述用途。消息包含用途、执行和输出状态、运行时间及任务 ID，使用纯文本自然段，不转发命令参数和终端原始输出。`progressIntervalMs` 默认 5 分钟；`mode: "completion"` 兼容固定 `sessionId` 的完成通知。
+
+
+长任务提交时，`taskSummary` 请写清“任务目的 + 预期产物”，例如“校验验证集质量并生成指标报告”，供机器人创建话题时先说明任务在做什么。开启 `notifications.botmux.progress.includeOutput` 后，通知会包含阶段、已完成/总数和最近日志；脚本可打印 `MCP_PROGRESS {"stage":"校验","completed":240,"total":1000,"unit":"样本"}` 并刷新输出。没有新进展时默认 30 分钟才更新一次状态，有变化按进度间隔同步。详细配置和输出范围见[具体进度说明](mcp_server/README.md#concrete-progress-and-opening-purpose)。

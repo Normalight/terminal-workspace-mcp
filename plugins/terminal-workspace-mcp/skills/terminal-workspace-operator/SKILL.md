@@ -64,3 +64,16 @@ For defer, save monitoring.resume and show monitoring.checkAfterMs/checkAfterAt 
 If externalNotification reports provider=botmux and registered=true, a durable server-side watcher will notify the configured destination for tasks meeting minDurationMs. Keep the same task IDs and follow defer normally; do not start another watcher or promise a ChatGPT turn will resume automatically. failed/uncertain mean notification delivery needs inspection, not task failure or permission to replay the command. Disabled deployments retain the existing manual/scheduler follow-up behavior.
 
 For long command submissions, supply a brief `taskSummary` (1–240 characters) stating the purpose without secrets. It persists with the task and may be sent to the configured external notification destination. Completion messages add execution/output state; they do not analyze raw logs. Omit `taskSummary` when resuming or polling.
+
+
+## Explain long tasks and report concrete progress
+
+Before submitting work that may outlive the current turn, provide `taskSummary` (1–240 characters) describing the user's goal and expected deliverable. For example, “Evaluate model quality on the validation set and produce a metrics report.” This becomes the opening purpose of the dedicated bot monitoring topic; a label such as “Python task” does not explain the goal. Do not invent missing goals or promise unverified artifacts. When the purpose is unknown, state that limitation.
+
+For scripts under your control, print a structured progress line when a meaningful stage or count changes, flushing stdout:
+
+```python
+print('MCP_PROGRESS ' + json.dumps({"stage": "Validation", "completed": done, "total": total, "unit": "samples", "message": "Scoring validation examples"}), flush=True)
+```
+
+Import `json` in the script. The counts describe the named stage, not the whole workflow. Report actual work completed, never a timer-derived percentage. The optional botmux output-progress setting reads a bounded tail of this command's output, also recognizing common epoch/step counters and progress bars. Keep secrets out of emitted progress. A silent process has no measurable progress unless it reports some; do not rerun existing work merely to add progress instrumentation.

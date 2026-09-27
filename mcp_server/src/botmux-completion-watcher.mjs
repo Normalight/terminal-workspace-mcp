@@ -14,7 +14,7 @@ export class BotmuxCompletionWatcher {
   constructor({ config, root, terminals, env, cwd, send = sendBotmux, run, now = Date.now }) {
     Object.assign(this, { config, root, terminals, env, cwd, send, now });
     this.controller = new AbortController();
-    this.monitor = new BotmuxTaskMonitor({ config, env, cwd, now, run, send, signal: this.controller.signal });
+    this.monitor = new BotmuxTaskMonitor({ config, env, cwd, now, run, send, terminals, signal: this.controller.signal });
     this.counts = {}; this.lastErrorCode = null;
   }
   async initialize() {
@@ -39,6 +39,7 @@ export class BotmuxCompletionWatcher {
             ...(this.config.mode === 'task' ? { botAppId: this.config.botAppId, chatId: this.config.chatId } : {}) },
           minDurationMs: this.config.minDurationMs, status: 'watching', attempts: 0,
           registeredAt: this.now(), startedAt: state.startedAt ?? state.submittedAt ?? null,
+          taskSummarySource: state.taskSummarySource ?? (state.taskSummary ? 'caller' : 'command_type'),
           taskSummary: state.taskSummary ?? describeTask(state.command).taskSummary };
         // Atomic create-if-absent: duplicate clients cannot replace a pinned
         // target, a completed delivery, or another process's in-flight send.

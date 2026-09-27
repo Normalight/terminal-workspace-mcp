@@ -44,7 +44,13 @@
       "chatId": "",
       "progressIntervalMs": 300000,
       "taskTimeoutMs": 120000,
-      "eventTimeoutMs": 120000
+      "eventTimeoutMs": 120000,
+      "progress": {
+        "includeOutput": false,
+        "maxBytes": 8192,
+        "maxLines": 6
+      },
+      "unchangedIntervalMs": 1800000
     }
   },
   "files": {

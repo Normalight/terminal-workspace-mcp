@@ -16,7 +16,7 @@ const config = { enabled: true, mode: 'task', executable: 'botmux', botAppId: 'c
   eventTimeoutMs: 3000, retryDelayMs: 100, maxAttempts: 2 };
 const start = Date.parse('2026-09-27T00:00:00Z');
 async function setup() {
-  const f = await fixture(), lock = new KeyedMutex(), calls = [], messages = [], watchers = []; let now = start + 2000, response = 'completed', failure;
+  const f = await fixture(), lock = new KeyedMutex(), calls = [], messages = [], watchers = []; let now = start + 2000, response = 'completed', failure, output = '', end = 0;
   const state = { ...ids, startedAt: new Date(start).toISOString(), status: 'running', executionStatus: 'running', taskSummary: '**数据评估： **', command: 'SECRET', output: 'PRIVATE_LOG' };
   let event;
   const run = async ({ args }) => {
@@ -33,7 +33,7 @@ async function setup() {
       : { state: response, output: { content: JSON.stringify({ eventId: event, summary: '依据最新状态同步。' }) } };
     return { status: 'ok', value };
   };
-  const terminals = { fileLocked: (_key, _file, fn) => lock.run('worker', fn), commandStatus: async () => state };
+  const terminals = { readCommand: async (_id, _cmd, options) => ({ startCursor: 0, output: { content: options.maxBytes === 4 ? '' : output, endCursor: end, cursor: 0, outputGap: false } }), fileLocked: (_key, _file, fn) => lock.run('worker', fn), commandStatus: async () => state };
   const make = async overrides => {
     const w = await new BotmuxCompletionWatcher({ config: { ...config, ...overrides }, root: path.join(f.root, 'watches'), terminals,
       env: f.env, cwd: f.root, now: () => now, run, send: async args => { messages.push(args); return { status: 'sent', messageId: `om_${messages.length}` }; } }).initialize();
@@ -41,7 +41,7 @@ async function setup() {
   };
   const w = await make();
   const file = w.file(ids.sessionId, ids.commandId);
-  return { ...f, w, state, calls, messages, make, file, get: () => jsonFile(file), advance: ms => { now += ms; },
+  return { ...f, w, state, calls, messages, make, file, get: () => jsonFile(file), output: text => { output = text; end += text.length; }, advance: ms => { now += ms; },
     response: value => { response = value; }, failure: value => { failure = value; },
     done: duration => Object.assign(state, { status: 'failed', executionStatus: 'failed', outputStatus: 'complete', exitCode: 3, finishedAt: new Date(start + duration).toISOString() }),
     cleanup: async () => { for (const w of watchers) await w.close(); await f.cleanup(); } };
@@ -117,5 +117,27 @@ test('task formatter preserves unknown results and CLI failures never claim succ
     assert.equal((await runBotmuxCli({ executable: path.join(f.root, 'missing'), args: [], env: f.env, cwd: f.root, timeoutMs: 1000 })).status, 'retry');
     const result = await runBotmuxCli({ executable: process.execPath, args: ['-e', 'console.log(JSON.stringify({ok:true,value:1},null,2))'], env: f.env, cwd: f.root, timeoutMs: 2000 });
     assert.equal(result.value.value, 1);
+  } finally { await f.cleanup(); }
+});
+
+
+test('real progress and purpose reach the bot; unchanged updates are suppressed until heartbeat', async () => {
+  const f = await setup();
+  try {
+    await f.w.close();
+    f.output('MCP_PROGRESS {"stage":"校验","completed":24,"total":100,"unit":"样本"}\npassword=SECRET\n');
+    const w = await f.make({ progress: { includeOutput: true, maxBytes: 1024, maxLines: 3 }, unchangedIntervalMs: 10000 });
+    f.state.taskSummary = '检查样本质量并生成校验报告'; f.state.taskSummarySource = 'caller';
+    await w.observe(f.state); await w.tick(); await w.tick(); await w.tick();
+    assert.match(f.messages[0].message, /任务目的：检查样本质量并生成校验报告/);
+    assert.match(f.messages[0].message, /24\/100 样本，24%/); assert(!f.messages[0].message.includes('SECRET'));
+    f.advance(2100); await w.tick(); assert.equal(f.calls.filter(a => a[1] === 'send').length, 0);
+    f.output('MCP_PROGRESS {"stage":"校验","completed":60,"total":100,"unit":"样本"}\n');
+    f.advance(2100); await w.tick(); await w.tick(); await w.tick();
+    assert.match(f.messages[1].message, /60\/100 样本，60%/);
+    f.advance(10100); await w.tick(); await w.tick(); await w.tick();
+    assert.match(f.messages[2].message, /没有新增输出/);
+    f.done(20000); await w.tick(); await w.tick(); await w.tick();
+    assert.equal((await f.get()).status, 'sent'); assert.match(f.messages[3].message, /执行失败/);
   } finally { await f.cleanup(); }
 });

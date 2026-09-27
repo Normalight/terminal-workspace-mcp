@@ -4,7 +4,7 @@
 
 For ChatGPT setup, follow the **[Secure MCP Tunnel walkthrough](CHATGPT.md)** ([中文](CHATGPT.zh-CN.md)): create a tunnel, run the local client, then create a ChatGPT app with Connection set to Tunnel.
 
-A personal remote terminal for the account running the server. Release 0.5.9 exposes two tools by default:
+A personal remote terminal for the account running the server. Release 0.5.10 exposes two tools by default:
 
 - `execute_command`: shell commands, persistent tmux sessions, interactive input, and output polling.
 - `get_file`: original files and images, with resumable chunks for large files.
@@ -357,6 +357,8 @@ Configure the private `config.local.json` overlay:
       "mentionOpenId": "ou_RECIPIENT",
       "minDurationMs": 300000,
       "progressIntervalMs": 300000,
+      "unchangedIntervalMs": 1800000,
+      "progress": { "includeOutput": true, "maxBytes": 8192, "maxLines": 6 },
       "pollIntervalMs": 5000,
       "taskTimeoutMs": 120000,
       "eventTimeoutMs": 120000,
@@ -376,13 +378,13 @@ Use a botmux version supporting `session start/send/result`, `headless bind --sc
 
 For a fixed existing destination, retain `mode: "completion"` (the compatibility default) and set `sessionId` to an authorized botmux session UUID. This mode sends only the final state and does not create an agent or topic. Its botmux `sessionId` selects both the bot and the destination; it is unrelated to a terminal `sessionId`. Empty `mentionOpenId` is allowed only in this mode.
 
-Both modes register a durable watch once per active tracked command. Responses include `externalNotification` with the mode, registration/delivery state, threshold and, after delegation, bot task/topic IDs. Previously completed history is not backfilled. Execution status and output collection status remain separate; unknown results are reported as unknown. Messages include the saved task purpose, runtime, exit code and task IDs, without command arguments or terminal logs. Agent summaries describe state, not the contents of task artifacts.
+Both modes register a durable watch once per active tracked command. Responses include `externalNotification` with the mode, registration/delivery state, threshold and, after delegation, bot task/topic IDs. Previously completed history is not backfilled. Execution status and output collection status remain separate; unknown results are reported as unknown. Messages lead with the saved user goal and expected deliverable from `taskSummary`, followed by concrete progress when enabled, runtime, exit code and task IDs. Command arguments are not forwarded. Missing purposes are labeled as missing; a command category is not treated as the user goal. Output collection completion does not verify artifacts.
 
 Records under `paths.service/botmux-notifications` pin their original mode, destination, threshold and progress interval. Restarts resume the existing task/topic and pending event, instead of creating another. Configuration changes apply to new registrations. Disable the integration to suspend checks and retain records. Completed records remain for deduplication; `/healthz.backgroundNotifications` reports counts and a safe last error code. The service must be running to deliver updates.
 
 Only one event is pending per task. If an agent misses its response deadline, the service reports observed state directly and marks the summary unavailable, including on completion, without queuing more turns behind the stalled one. Failures before a process starts have bounded retries. A crash or ambiguous receipt during task creation, binding, event submission or message delivery becomes `uncertain` for operator inspection; automatic replay could duplicate a topic or message. Delivery is not guaranteed exactly once across an external failure. Botmux failures do not stop commands or block MCP tool replies. Workers coordinate through the shared notification-directory lock.
 
-Environment overrides include `MCP_BOTMUX_ENABLED`, `MCP_BOTMUX_MODE`, `MCP_BOTMUX_EXECUTABLE`, `MCP_BOTMUX_BOT_APP_ID`, `MCP_BOTMUX_CHAT_ID`, `MCP_BOTMUX_SESSION_ID`, `MCP_BOTMUX_MENTION_OPEN_ID`, `MCP_BOTMUX_MIN_DURATION_MS`, `MCP_BOTMUX_PROGRESS_INTERVAL_MS`, `MCP_BOTMUX_POLL_INTERVAL_MS`, `MCP_BOTMUX_TASK_TIMEOUT_MS`, `MCP_BOTMUX_EVENT_TIMEOUT_MS`, `MCP_BOTMUX_SEND_TIMEOUT_MS`, `MCP_BOTMUX_RETRY_DELAY_MS`, and `MCP_BOTMUX_MAX_ATTEMPTS`. Restart only the MCP server to apply the private overlay. Tests use isolated fake adapters and disable live routing by default.
+Environment overrides include `MCP_BOTMUX_ENABLED`, `MCP_BOTMUX_MODE`, `MCP_BOTMUX_EXECUTABLE`, `MCP_BOTMUX_BOT_APP_ID`, `MCP_BOTMUX_CHAT_ID`, `MCP_BOTMUX_SESSION_ID`, `MCP_BOTMUX_MENTION_OPEN_ID`, `MCP_BOTMUX_MIN_DURATION_MS`, `MCP_BOTMUX_PROGRESS_INTERVAL_MS`, `MCP_BOTMUX_UNCHANGED_INTERVAL_MS`, `MCP_BOTMUX_PROGRESS_INCLUDE_OUTPUT`, `MCP_BOTMUX_PROGRESS_MAX_BYTES`, `MCP_BOTMUX_PROGRESS_MAX_LINES`, `MCP_BOTMUX_POLL_INTERVAL_MS`, `MCP_BOTMUX_TASK_TIMEOUT_MS`, `MCP_BOTMUX_EVENT_TIMEOUT_MS`, `MCP_BOTMUX_SEND_TIMEOUT_MS`, `MCP_BOTMUX_RETRY_DELAY_MS`, and `MCP_BOTMUX_MAX_ATTEMPTS`. Restart only the MCP server to apply the private overlay. Tests use isolated fake adapters and disable live routing by default.
 
 Supply an optional `taskSummary` (1–240 characters) when submitting long work, for example:
 
@@ -391,3 +393,24 @@ Supply an optional `taskSummary` (1–240 characters) when submitting long work,
 ```
 
 Write a brief non-sensitive purpose: it will be sent verbatim as escaped plain text to the configured destination. Newlines/control characters become spaces. The summary is saved with the command and returned by status-only reads; later polling cannot replace it. When omitted, the service provides a coarse category such as a Python task, without copying paths, arguments or environment variables. It does not invoke a model to summarize raw output.
+
+
+### Concrete progress and opening purpose
+
+Before submitting long work, fill `taskSummary` with the user's goal and expected deliverable, for example “Check validation-set quality and produce a metrics report.” The dedicated topic uses this purpose in its title and opening message. A missing summary remains a coarse type plus an explicit missing-purpose notice; the service cannot recover the original ChatGPT conversation's intent from a process name.
+
+`notifications.botmux.progress.includeOutput` defaults to false to preserve existing output-sharing behavior. Enable it explicitly, as in the task-mode example above, to read up to `maxBytes` of the saved command's output and forward at most `maxLines` recent lines. It supports existing running watches on their next state event. The user's read cursor is independent; the sampled range is bounded by that command's start/end, including after another command has run. PTY output can also include background processes sharing the terminal.
+
+For precise progress, emit and flush one line at a meaningful stage change:
+
+```python
+import json
+print("MCP_PROGRESS " + json.dumps({
+    "stage": "Validation", "completed": 240, "total": 1000,
+    "unit": "samples", "message": "Scoring validation examples"
+}), flush=True)
+```
+
+The watcher prefers explicit reports and also recognizes common `epoch 3/12`, `step 24/100` and progress-bar counters. These percentages describe the reported stage. It also shows recent log lines so users can see work such as downloading, validating or saving. Reports scrolled out of the bounded tail retain their age; no new output is reported as silence, not evidence that the task is stuck. Programs buffering output should flush or use their unbuffered option. No percentage is inferred from elapsed time, and a successful exit does not force 100%.
+
+Changed evidence is eligible for delivery every `progressIntervalMs` (default five minutes); unchanged evidence is summarized only every `unchangedIntervalMs` (default thirty minutes). Completion bypasses this suppression. Plain snippets are normalized and common credentials/URL query values are redacted before storage and forwarding. Redaction is best effort: keep secrets out of progress output, or leave `includeOutput` disabled. Logs are treated as untrusted evidence and cannot authorize actions. Agent-summary delays still fall back to the same concrete evidence.

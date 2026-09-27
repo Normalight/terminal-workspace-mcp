@@ -113,3 +113,6 @@ Long submissions may include `taskSummary` (1–240 characters). Completion noti
 ## License
 
 [MIT](LICENSE). Dependencies retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Changes are recorded in [CHANGELOG.md](CHANGELOG.md).
+
+
+For useful monitoring, write the user goal and expected deliverable in `taskSummary`. Opt in to `notifications.botmux.progress.includeOutput` to include bounded command-log evidence and stage counters. Scripts can emit `MCP_PROGRESS` JSON lines; unchanged evidence uses a separate, slower heartbeat. See [concrete progress and opening purpose](mcp_server/README.md#concrete-progress-and-opening-purpose).
