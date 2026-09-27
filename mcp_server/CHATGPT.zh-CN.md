@@ -1,12 +1,54 @@
-# 将 Terminal Workspace MCP 接入 ChatGPT
+# 通过 Tunnel 在 ChatGPT 创建 Terminal Workspace MCP 应用
 
 [English](CHATGPT.md) · [服务操作文档](README.md)
 
-MCP 进程运行在你的 Linux 机器上，ChatGPT 远程调用，GitHub 保存源码。这里说明个人开发者模式的连接方式，官方文档核对日期为 2026-09-25。
+本教程采用 OpenAI Secure MCP Tunnel 接入已有 HTTP 服务。MCP 进程和隧道客户端运行在你的 Linux 机器上，ChatGPT 选择隧道后远程调用。官方文档及本机隧道客户端参数核对日期：2026-09-27。
+
+```text
+ChatGPT 的 MCP 应用（Connection: Tunnel）
+    → OpenAI Secure MCP Tunnel
+    → Linux 上的 tunnel-client
+    → http://127.0.0.1:5679/mcp
+    → 持久化 tmux 终端
+```
+
+## 0. 创建隧道并准备权限
+
+打开 [Platform Tunnels](https://platform.openai.com/settings/organization/tunnels)，选对组织，创建隧道并关联实际使用的 ChatGPT 工作区。保存 `tunnel_id`，按页面指引取得运行密钥。创建需要 Tunnels Read + Manage；运行和在 ChatGPT 选用需要 Read + Use。开发者模式另受账号及工作区权限控制，见[官方 Tunnel 指南](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)。
+
+| 值 | 配置位置 | 用途 |
+| --- | --- | --- |
+| `tunnel_id` | 隧道客户端与 ChatGPT 的 Tunnel 表单 | 选择同一条隧道 |
+| 隧道运行密钥 | 客户端的 `CONTROL_PLANE_API_KEY` | 隧道客户端连接 OpenAI |
+| 本地 MCP token | `config.local.json` 的 `auth.token`，以及隧道的 `MCP_RUNTIME_AUTH` | 隧道访问本机 MCP |
+
+本机地址只供隧道客户端访问。ChatGPT 的 Tunnel 表单选隧道 ID；密钥保存在运行机器。仓库地址不是 MCP 连接地址。
 
 ## 1. 启动本地服务
 
-先按仓库 README 安装依赖，以下命令在仓库根目录执行。在已忽略的 `mcp_server/config.local.json` 中持久保存 `auth.token`，权限设为 0600；也可以在启动前导出 `MCP_AUTH_TOKEN`。隧道需要使用同一个 token。
+先按仓库 README 安装依赖，以下命令在仓库根目录执行。首次部署用下面的脚本创建本地 token；已有 token 和其他配置会保留。已有部署直接复用当前服务即可。
+
+```bash
+mkdir -p .tmp .cache .local/config
+export TMPDIR="$PWD/.tmp" TMP="$PWD/.tmp" TEMP="$PWD/.tmp"
+export XDG_CACHE_HOME="$PWD/.cache" XDG_CONFIG_HOME="$PWD/.local/config"
+export npm_config_cache="$PWD/.cache/npm"
+python3 -B - <<'PY'
+import json, os, secrets
+from pathlib import Path
+p = Path('mcp_server/config.local.json')
+c = json.loads(p.read_text()) if p.exists() else {}
+auth = c.setdefault('auth', {})
+if not auth.get('token'):
+    auth['token'] = os.environ.get('MCP_AUTH_TOKEN') or secrets.token_hex(32)
+fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, 'w') as f:
+    json.dump(c, f, indent=2)
+p.chmod(0o600)
+PY
+```
+
+本地联调可使用现有启动入口；需要退出会话后持续运行时，按[独立服务部署](SERVICES.md)安装 systemd 服务。
 
 ```bash
 python3 -B mcp_server/scripts/service.py start
@@ -18,39 +60,61 @@ curl --noproxy '*' -fsS http://127.0.0.1:5679/healthz
 
 ## 2. 使用 Secure MCP Tunnel
 
-个人使用可保持 MCP 只监听本机回环地址。按 [OpenAI 官方隧道指南](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) 获取客户端并创建隧道，将隧道关联到实际使用的 ChatGPT 工作区；创建连接的人需要 Tunnels Read + Use 权限。隧道客户端需要访问 OpenAI 的出站 HTTPS 和本地 MCP。
+从 Platform 隧道页面提供的下载入口获取适配系统架构的客户端，放入工作区的 `.local/bin/` 并赋予执行权限。已有兼容客户端直接复用。客户端需要能访问 OpenAI 的出站 HTTPS 和本地 MCP。
 
-下面是运行版客户端支持的 HTTP 启动参数。替换可执行文件路径，并用该版本的 `run --help` 核对参数。依次输入隧道 ID、隧道运行密钥和第 1 步的**现有 MCP token**：
+另开终端，在同一仓库根目录执行下面的 HTTP 启动命令。替换可执行文件路径；该示例已与运行版客户端的 `run --help` 核对。新版本的交互式配置/profile 用法可按 `help quickstart` 操作，不要混用不同版本的参数。
 
 ```bash
 TUNNEL_CLIENT="/absolute/path/to/tunnel-client-runtime"
 read -r -p 'Tunnel ID: ' CONTROL_PLANE_TUNNEL_ID
 read -r -s -p 'Tunnel runtime key: ' CONTROL_PLANE_API_KEY
 printf '\n'
-read -r -s -p 'Existing MCP token: ' MCP_AUTH_TOKEN
-printf '\n'
 export CONTROL_PLANE_TUNNEL_ID CONTROL_PLANE_API_KEY
+MCP_AUTH_TOKEN="$(python3 -B -c 'import json; print(json.load(open("mcp_server/config.local.json"))["auth"]["token"])')"
 export MCP_RUNTIME_AUTH="Bearer $MCP_AUTH_TOKEN"
 mkdir -p .tmp .cache .local/config
 
 TMPDIR="$PWD/.tmp" XDG_CACHE_HOME="$PWD/.cache" \
 XDG_CONFIG_HOME="$PWD/.local/config" \
 "$TUNNEL_CLIENT" run \
+  --control-plane.api-key env:CONTROL_PLANE_API_KEY \
+  --control-plane.tunnel-id "$CONTROL_PLANE_TUNNEL_ID" \
   --mcp.server-url http://127.0.0.1:5679/mcp \
   --mcp.extra-headers 'Authorization: env:MCP_RUNTIME_AUTH' \
   --mcp.discovery-extra-headers 'Authorization: env:MCP_RUNTIME_AUTH' \
-  --health.listen-addr 127.0.0.1:8791
+  --health.listen-addr 127.0.0.1:8791 \
+  --log.file ''
 ```
 
-保持进程运行。已有部署应复用现有隧道，避免同一隧道 ID 再启动一个轮询进程。隧道运行密钥用于连接 OpenAI，本地 MCP token 用于隧道到服务这一段认证，两者用途不同。项目的 `service.py` 管理 MCP 服务和可选 TCP 转发，不管理隧道客户端；持久运行隧道应交给你的进程管理器。
+保持进程运行，并从另一终端检查下面两个地址。`healthz` 检查进程存活，`readyz` 检查转发就绪；尚未就绪时先查隧道日志。
+
+```bash
+curl --noproxy '*' -fsS http://127.0.0.1:8791/healthz
+curl --noproxy '*' -fsS http://127.0.0.1:8791/readyz
+```
+
+已有部署应复用现有隧道，避免同一隧道 ID 再启动一个轮询进程。需要常驻时，项目的 `services.py prepare --tunnel-spec /绝对路径/private-tunnel.json` 可生成独立 tunnel 单元；具体格式和安装步骤见[服务文档](SERVICES.md)。它不会创建 OpenAI 隧道或代办授权。MCP 更新只重启 server，保留 tunnel 和 terminals。
 
 修改 `client.url` 或执行 `config.mjs sync-plugin` 只更新生成的连接文件，不会配置隧道或在 ChatGPT 中创建应用。
 
 ## 3. 在 ChatGPT 创建连接
 
-在 **设置 → 安全与登录（Security and login）** 启用 **开发者模式（Developer mode）**。打开 [ChatGPT Plugins](https://chatgpt.com/plugins)，点击 **+**，命名为 **Terminal Workspace MCP**，连接方式选择 **Tunnel**，选择或填入隧道 ID 后创建。功能可用性受账号和工作区策略影响。入口以 [OpenAI 官方连接说明](https://developers.openai.com/plugins/deploy/connect-chatgpt) 为准。
+在 **设置 → 安全与登录（Security and login）** 启用 **开发者模式（Developer mode）**。打开 [ChatGPT Plugins](https://chatgpt.com/plugins)，点击 **+**，按下表创建应用。入口以 [OpenAI 官方连接说明](https://developers.openai.com/plugins/deploy/connect-chatgpt) 为准。
 
-默认配置下，应只发现 `execute_command` 和 `get_file`。新开对话并启用该连接，让它执行 `pwd`；成功结果应包含 `sessionId`、`stdout`、`nextCursor`。
+| 表单项 | 本项目填写内容 |
+| --- | --- |
+| 名称 | `Terminal Workspace MCP` |
+| 描述 | `在个人 Linux 工作区执行命令、恢复长任务并读取文件` |
+| Connection | **Tunnel** |
+| Tunnel | 第 0 步创建的 `tunnel_id`，从列表选择或粘贴 |
+
+点击创建后等待工具发现。若找不到隧道，先检查工作区关联和使用权限，再检查客户端是否就绪。仓库中的 `.mcp.json` 用于支持该格式的客户端；ChatGPT 此流程直接创建 Tunnel 连接。
+
+默认配置下，应只发现 `execute_command` 和 `get_file`。新开对话，从工具菜单添加该应用，发送：
+
+> 使用 Terminal Workspace MCP 执行 `pwd`，terminalKey 用 `onboarding/check`，taskSummary 为“验证 MCP 连接”，waitMs=1000；返回当前目录和 sessionId。后续查询复用 ID，不重复提交。
+
+成功结果应包含 `sessionId`、`commandId`、`stdout`、`nextCursor`。继续读取同一任务应保持 commandId。长任务返回 `nextAction:defer` 时结束前台轮询；可选 botmux 监听独立发送完成摘要，配置见 [通知说明](README.md#optional-botmux-completion-notifications)。
 
 ### 公网 HTTPS 方式
 

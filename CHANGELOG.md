@@ -2,6 +2,8 @@
 
 ## 0.5.7
 
+- Make Secure MCP Tunnel the primary ChatGPT onboarding path in both READMEs; include credential setup, readiness checks, app form values and metadata refresh.
+
 - Persist optional submission-only `taskSummary` text and include purpose/result summaries in long-task completion notices, including after client/server restarts.
 - Use coarse command-type descriptions when no summary was supplied, escape display markup, and keep command arguments and raw logs out of automatic summaries.
 - Document fixed botmux session routing, which selects both the sending bot and notification destination.

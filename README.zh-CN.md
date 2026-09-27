@@ -12,6 +12,18 @@
 
 命令使用服务账号权限，可以访问默认工作区之外的文件。请将服务用于可信的客户端和 agent；完整说明见 [SECURITY.md](SECURITY.md)。
 
+## 在 ChatGPT 通过 Tunnel 创建 MCP 应用
+
+本项目实际接入使用 **OpenAI Secure MCP Tunnel**：ChatGPT → Tunnel → 本机 `http://127.0.0.1:5679/mcp`。先完成下方本地安装，再按[中文完整教程](mcp_server/CHATGPT.zh-CN.md)操作。
+
+1. 在 [Platform Tunnels](https://platform.openai.com/settings/organization/tunnels) 创建隧道，关联要使用的 ChatGPT 工作区，取得隧道 ID 和运行密钥。
+2. 启动本地 MCP，再启动隧道客户端；本地 Bearer token 同时配置到隧道的调用和发现请求头。
+3. 在 ChatGPT 开启开发者模式，打开 [Plugins](https://chatgpt.com/plugins)，点击 **+** 创建应用，名称填写 **Terminal Workspace MCP**，**Connection 选择 Tunnel**，选中隧道或填写 `tunnel_id`。
+4. 创建后检查工具为 `execute_command`、`get_file`，新建对话添加应用并执行 `pwd` 验证。
+5. 更新工具参数后，在连接页面 **Refresh**，再开新对话验证。
+
+完整教程包含权限、客户端获取、启动命令、认证值对应表、健康/就绪检查和常见报错，已于 2026-09-27 核对[官方接入文档](https://developers.openai.com/plugins/deploy/connect-chatgpt)。`127.0.0.1` 是隧道在服务器上访问的地址；ChatGPT 的 Tunnel 表单填写隧道标识。GitHub 保存源码，运行中的服务和隧道提供实际连接。
+
 ## 安装和启动
 
 需要 Linux、Bash、tmux ≥3.2、flock（util-linux）、Node.js ≥22、npm，以及用于服务管理和测试的 Python ≥3.9。当前实现使用 Linux `/proc`，不支持 macOS 和原生 Windows。
@@ -30,12 +42,6 @@ node mcp_server/src/server.mjs
 默认 MCP 地址为 `http://127.0.0.1:5679/mcp`，默认工作区为仓库根目录。客户端选择 Streamable HTTP，设置同一地址和 `Authorization: Bearer <同一个 token>`。
 
 远程访问时通过 HTTPS 反向代理或认证隧道连接，将 `client.url` 改为实际入口。兼容的客户端可使用仓库内的[插件连接文件](plugins/terminal-workspace-mcp/README.md)。
-
-## 接入 ChatGPT 与更新
-
-见[完整部署与更新步骤](mcp_server/CHATGPT.zh-CN.md)：包含 Secure MCP Tunnel、本地 Bearer 认证、开发者模式、刷新工具列表和运行版本检查。
-
-ChatGPT 通过隧道或可达的 HTTPS 地址连接正在运行的服务。推送 GitHub 不会部署服务，也不会刷新 ChatGPT 已保存的连接。上面的 Bearer 请求头示例适用于允许自定义请求头的客户端；本项目通过公网 HTTPS 接入 ChatGPT 时还需要兼容的认证网关。
 
 ## 配置
 

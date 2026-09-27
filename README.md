@@ -12,6 +12,18 @@ A Linux terminal over MCP, with persistent tmux sessions and original file retri
 
 Commands run with the service account's permissions, including access beyond the default workspace. Use this server with clients and agents you trust. [Deployment and reporting guidance](SECURITY.md) describes the access model.
 
+## Create a ChatGPT MCP app through Tunnel
+
+This deployment uses **OpenAI Secure MCP Tunnel**: ChatGPT → Tunnel → local `http://127.0.0.1:5679/mcp`. Complete the local installation below, then follow the [full Tunnel walkthrough](mcp_server/CHATGPT.md) ([中文](mcp_server/CHATGPT.zh-CN.md)).
+
+1. Create a tunnel in [Platform Tunnels](https://platform.openai.com/settings/organization/tunnels), associate the target ChatGPT workspace, and obtain its ID and runtime key.
+2. Start MCP and the tunnel client. Configure the local Bearer token for both forwarding and discovery.
+3. Enable ChatGPT developer mode. At [Plugins](https://chatgpt.com/plugins), choose **+**, name the app **Terminal Workspace MCP**, select **Connection → Tunnel**, and choose or enter the tunnel ID.
+4. Verify `execute_command` and `get_file`; add the app in a new chat and run `pwd`.
+5. After schema changes, select **Refresh** on the saved connection and retest in a new chat.
+
+The walkthrough covers permissions, client download, startup, credentials, readiness and troubleshooting, checked against [official connection instructions](https://developers.openai.com/plugins/deploy/connect-chatgpt) on 2026-09-27. The loopback URL is used by the tunnel on your server; the ChatGPT form uses the tunnel identity.
+
 ## Requirements
 
 - Linux with Bash, tmux 3.2 or newer, and `flock` (util-linux).
@@ -40,12 +52,6 @@ The default endpoint is `http://127.0.0.1:5679/mcp`. The default workspace is th
 Configure your MCP client to use Streamable HTTP, that URL, and the header `Authorization: Bearer <the same token>`. Client configuration syntax varies; the included [plugin](plugins/terminal-workspace-mcp/README.md) provides connection files for compatible clients. For remote access, use an HTTPS reverse proxy or an authenticated tunnel and set `client.url` to its endpoint.
 
 For a persistent local token, put `{"auth":{"token":"your-token"}}` in `mcp_server/config.local.json` with file mode 0600. That file is ignored by Git. The server reads `config.json`, its local overlay, then explicit environment overrides.
-
-## Connect from ChatGPT
-
-Follow the [ChatGPT deployment and update guide](mcp_server/CHATGPT.md). It covers Secure MCP Tunnel, local Bearer authentication, developer-mode setup, refreshing tool definitions, and checking the running version.
-
-ChatGPT connects to the running service through a tunnel or reachable HTTPS endpoint. Pushing this repository to GitHub does not deploy the service or refresh a saved ChatGPT connection. The generic Bearer-header example above is for clients that accept custom headers; ChatGPT's public HTTPS connection requires a compatible authentication gateway for this server.
 
 ## Use the two tools
 

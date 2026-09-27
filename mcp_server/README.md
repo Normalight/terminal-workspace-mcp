@@ -2,6 +2,8 @@
 
 [Public repository](https://github.com/Normalight/terminal-workspace-mcp) · [MIT license](LICENSE) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
+For ChatGPT setup, follow the **[Secure MCP Tunnel walkthrough](CHATGPT.md)** ([中文](CHATGPT.zh-CN.md)): create a tunnel, run the local client, then create a ChatGPT app with Connection set to Tunnel.
+
 A personal remote terminal for the account running the server. Release 0.5.7 exposes two tools by default:
 
 - `execute_command`: shell commands, persistent tmux sessions, interactive input, and output polling.
@@ -133,10 +135,11 @@ After upgrading, newly opened terminals use the current hooks and logging protoc
 Inside a managed shell, use its configured terminal root to manage sessions. For an external terminal, get the resolved path from `config.mjs show`:
 
 ```bash
+TERMINAL_SESSION_ID='term_REPLACE_WITH_SAVED_SESSION_ID'
 tmux -S "$MCP_TERMINAL_ROOT/tmux.sock" list-sessions
-tmux -S "$MCP_TERMINAL_ROOT/tmux.sock" attach -t <sessionId>
-tmux -S "$MCP_TERMINAL_ROOT/tmux.sock" resize-window -t <sessionId>:0 -x 160 -y 50
-tmux -S "$MCP_TERMINAL_ROOT/tmux.sock" kill-session -t <sessionId>
+tmux -S "$MCP_TERMINAL_ROOT/tmux.sock" attach -t "$TERMINAL_SESSION_ID"
+tmux -S "$MCP_TERMINAL_ROOT/tmux.sock" resize-window -t "$TERMINAL_SESSION_ID:0" -x 160 -y 50
+tmux -S "$MCP_TERMINAL_ROOT/tmux.sock" kill-session -t "$TERMINAL_SESSION_ID"
 ```
 
 Close only sessions belonging to the completed task when their processes are no longer needed.
@@ -185,7 +188,7 @@ node mcp_server/examples/completion-client.mjs 'sleep 5; printf first' 'sleep 2;
 It uses the configured local HTTP endpoint and authentication; set `MCP_NOTIFICATION_URL` to exercise a relay/tunnel endpoint instead. Before submitting, it writes a private checkpoint under `outputs/mcp-client-state/` containing its stable task key. It then saves the returned task IDs and consumes output incrementally while the task runs, saving each consumed cursor before proceeding. A crash between output delivery and checkpoint persistence can repeat a page; it does not replay the command. If the client process exits, use the printed checkpoint path:
 
 ```bash
-node mcp_server/examples/completion-client.mjs --resume /absolute/workspace/outputs/mcp-client-state/<id>.json
+node mcp_server/examples/completion-client.mjs --resume "/absolute/workspace/outputs/mcp-client-state/REPLACE_WITH_CHECKPOINT_ID.json"
 ```
 
 Resume only inspects/subscribes/reads the saved task, even when the submission reply was lost. It never submits another command or continues unsubmitted commands from the original argument list. An unconfirmed submission stops with an explicit diagnostic. A crash between writing stdout and saving its cursor may repeat that last output page.

@@ -1,12 +1,54 @@
-# Connect Terminal Workspace MCP to ChatGPT
+# Create a Terminal Workspace MCP app in ChatGPT through Tunnel
 
 [中文](CHATGPT.zh-CN.md) · [Operator guide](README.md)
 
-The MCP process runs on your Linux machine. ChatGPT calls it remotely; GitHub hosts the source. This guide covers a personal developer-mode connection. Documentation checked against official OpenAI guidance on 2026-09-25.
+This walkthrough connects the existing HTTP service through OpenAI Secure MCP Tunnel. MCP and the tunnel client run on your Linux machine. Official guidance and local runtime-client flags were checked on 2026-09-27.
+
+```text
+ChatGPT MCP app (Connection: Tunnel)
+    → OpenAI Secure MCP Tunnel
+    → tunnel-client on Linux
+    → http://127.0.0.1:5679/mcp
+    → persistent tmux terminals
+```
+
+## 0. Create the tunnel and prepare access
+
+In [Platform Tunnels](https://platform.openai.com/settings/organization/tunnels), select the organization, create a tunnel, associate the target ChatGPT workspace, and obtain its ID and runtime key. Creation needs Tunnels Read + Manage; running/selecting needs Read + Use. Developer-mode access is separate. See [the official Tunnel guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
+
+| Value | Where it goes | Purpose |
+| --- | --- | --- |
+| `tunnel_id` | Tunnel client and ChatGPT Tunnel selection | Select the same tunnel |
+| Runtime key | Client's `CONTROL_PLANE_API_KEY` | Authenticate the tunnel to OpenAI |
+| Local MCP token | `config.local.json` → `auth.token`, and client's `MCP_RUNTIME_AUTH` | Authenticate local MCP requests |
+
+The loopback address is for the local tunnel client. ChatGPT selects the tunnel identity; keys stay on the running machine. The repository URL hosts source code.
 
 ## 1. Start the local service
 
-Install the prerequisites and dependencies from the repository README. Run these commands from the repository root. Use one persistent `auth.token` in the ignored `mcp_server/config.local.json` (mode 0600), or export `MCP_AUTH_TOKEN` before starting the service. Reuse that same token for the tunnel.
+Install prerequisites and dependencies from the repository README. Run commands from the repository root. For a new deployment, create a persistent token below; existing tokens and other configuration are preserved. Reuse an already-running deployment.
+
+```bash
+mkdir -p .tmp .cache .local/config
+export TMPDIR="$PWD/.tmp" TMP="$PWD/.tmp" TEMP="$PWD/.tmp"
+export XDG_CACHE_HOME="$PWD/.cache" XDG_CONFIG_HOME="$PWD/.local/config"
+export npm_config_cache="$PWD/.cache/npm"
+python3 -B - <<'PY'
+import json, os, secrets
+from pathlib import Path
+p = Path('mcp_server/config.local.json')
+c = json.loads(p.read_text()) if p.exists() else {}
+auth = c.setdefault('auth', {})
+if not auth.get('token'):
+    auth['token'] = os.environ.get('MCP_AUTH_TOKEN') or secrets.token_hex(32)
+fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, 'w') as f:
+    json.dump(c, f, indent=2)
+p.chmod(0o600)
+PY
+```
+
+Use the launcher below for local testing. For operation after logout, install the [independent systemd services](SERVICES.md).
 
 ```bash
 python3 -B mcp_server/scripts/service.py start
@@ -18,39 +60,61 @@ With the default configuration, health reports `version: "0.5.7"`, `toolProfile:
 
 ## 2. Connect a Secure MCP Tunnel
 
-For personal use, keep the MCP listener on loopback. Obtain the official tunnel client and create a tunnel following [OpenAI's Secure MCP Tunnel guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels). Associate it with the ChatGPT workspace that will use it; the creator needs Tunnels Read + Use. The client needs outbound HTTPS to OpenAI and access to the local MCP listener.
+Download the appropriate client from the Platform tunnel page into the workspace's `.local/bin/` and make it executable; reuse a compatible existing binary. It needs outbound HTTPS and access to the local MCP listener.
 
-The following HTTP example uses flags supported by the runtime client. Set the executable path to your downloaded binary. Check its `run --help` for version-specific options. Enter the tunnel ID and runtime control-plane key supplied by your tunnel setup, and the **existing local MCP token** from step 1:
+Open another terminal at the repository root. Set the executable path below; these HTTP flags were checked against the runtime client's `run --help`. For newer interactive/profile workflows, consult `help quickstart` and avoid mixing version-specific interfaces.
 
 ```bash
 TUNNEL_CLIENT="/absolute/path/to/tunnel-client-runtime"
 read -r -p 'Tunnel ID: ' CONTROL_PLANE_TUNNEL_ID
 read -r -s -p 'Tunnel runtime key: ' CONTROL_PLANE_API_KEY
 printf '\n'
-read -r -s -p 'Existing MCP token: ' MCP_AUTH_TOKEN
-printf '\n'
 export CONTROL_PLANE_TUNNEL_ID CONTROL_PLANE_API_KEY
+MCP_AUTH_TOKEN="$(python3 -B -c 'import json; print(json.load(open("mcp_server/config.local.json"))["auth"]["token"])')"
 export MCP_RUNTIME_AUTH="Bearer $MCP_AUTH_TOKEN"
 mkdir -p .tmp .cache .local/config
 
 TMPDIR="$PWD/.tmp" XDG_CACHE_HOME="$PWD/.cache" \
 XDG_CONFIG_HOME="$PWD/.local/config" \
 "$TUNNEL_CLIENT" run \
+  --control-plane.api-key env:CONTROL_PLANE_API_KEY \
+  --control-plane.tunnel-id "$CONTROL_PLANE_TUNNEL_ID" \
   --mcp.server-url http://127.0.0.1:5679/mcp \
   --mcp.extra-headers 'Authorization: env:MCP_RUNTIME_AUTH' \
   --mcp.discovery-extra-headers 'Authorization: env:MCP_RUNTIME_AUTH' \
-  --health.listen-addr 127.0.0.1:8791
+  --health.listen-addr 127.0.0.1:8791 \
+  --log.file ''
 ```
 
-Keep this process running. For an existing deployment, reuse its running tunnel instead of starting another poller with the same tunnel ID. The tunnel runtime key authenticates to OpenAI; the separate MCP token authenticates the local forwarding hop. The service helper manages the MCP server and optional TCP relay, not the tunnel client. Use your process manager to persist the tunnel.
+Keep the process running and check liveness and forwarding readiness from another terminal:
+
+```bash
+curl --noproxy '*' -fsS http://127.0.0.1:8791/healthz
+curl --noproxy '*' -fsS http://127.0.0.1:8791/readyz
+```
+
+Reuse an existing tunnel instead of starting a second poller for its identity. For persistent supervision, `services.py prepare --tunnel-spec /absolute/private-tunnel.json` generates a separate tunnel unit; see [its specification and installation steps](SERVICES.md). It does not create or authorize the OpenAI tunnel. MCP updates restart only the server, preserving tunnel and terminal processes.
 
 Changing `client.url` or running `config.mjs sync-plugin` updates generated connection files only. It does not configure the tunnel or register an app in ChatGPT.
 
 ## 3. Add the connection in ChatGPT
 
-Enable Developer mode under **Settings → Security and login**. Open [ChatGPT Plugins](https://chatgpt.com/plugins), choose **+**, name the connection **Terminal Workspace MCP**, and select **Tunnel**. Choose the tunnel or enter its ID, then create the connection. Access depends on account and workspace policy. See [OpenAI's connection instructions](https://developers.openai.com/plugins/deploy/connect-chatgpt).
+Enable Developer mode under **Settings → Security and login**. Open [ChatGPT Plugins](https://chatgpt.com/plugins), choose **+**, and use the following fields. See [OpenAI's connection instructions](https://developers.openai.com/plugins/deploy/connect-chatgpt).
 
-Confirm discovery lists only `execute_command` and `get_file` with the default profile. Open a new conversation, enable the connection, and ask it to run `pwd`. A successful command result includes `sessionId`, `stdout`, and `nextCursor`.
+| Field | Value |
+| --- | --- |
+| Name | `Terminal Workspace MCP` |
+| Description | `Execute commands, resume long tasks and retrieve files in my Linux workspace` |
+| Connection | **Tunnel** |
+| Tunnel | Select or paste the `tunnel_id` from step 0 |
+
+Create the connection and inspect tool discovery. For a missing tunnel, check workspace association, permissions and client readiness. This flow creates the ChatGPT connection directly; repository `.mcp.json` files serve clients that import that format.
+
+Confirm discovery lists `execute_command` and `get_file`. Add the app from the tools menu in a new conversation and send:
+
+> Use Terminal Workspace MCP to run `pwd`, with terminalKey `onboarding/check`, taskSummary "Verify MCP connection" and waitMs=1000. Return the directory and sessionId. Reuse saved IDs for later reads without resubmitting.
+
+Expect `sessionId`, `commandId`, `stdout` and `nextCursor`. A later read should preserve commandId. For long tasks, end foreground polling on `nextAction:defer`; optional [botmux completion notices](README.md#optional-botmux-completion-notifications) run independently and include task/result summaries.
 
 ### Public HTTPS alternative
 
