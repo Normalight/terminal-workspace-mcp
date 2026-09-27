@@ -2,6 +2,8 @@
 
 ## 0.5.10
 
+- Finish draining dead terminal panes even when tmux has no exit status; save an independent Bash exit receipt for explicit shell exits and preserve unknown codes honestly.
+
 - Lead monitoring topics with the user goal and expected deliverable, with explicit missing-purpose handling and improved submission guidance.
 - Add opt-in bounded command-output progress: structured MCP_PROGRESS reports, stage counters, recent log evidence, report age and output silence. Redact common credentials before forwarding.
 - Suppress unchanged progress until a configurable heartbeat while always reporting completion; keep evidence available when agent summaries time out.

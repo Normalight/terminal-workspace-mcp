@@ -92,9 +92,10 @@ export async function commandState(manager, id, commandId) {
     jsonFile(base + '.result.json', null), jsonFile(base + '.executed.json', null), jsonFile(base + '.started.json', null),
     jsonFile(base + '.output-start.json', null), jsonFile(base + '.delivery.json', null), manager.pane(id), jsonFile(path.join(manager.dir(id), 'meta.json')),
   ]);
+  const shellExit = !inspectedPane.alive ? await jsonFile(base + '.shell-exit.json', null) : null;
   let drained = !inspectedPane.alive && session.outputProtocol >= 1 ? await jsonFile(path.join(manager.dir(id), 'log-drained.json'), null) : null;
   const pane = session.outputProtocol >= 1 && !inspectedPane.alive
-    ? await drainExitedPane(manager, id, { ...inspectedPane, pipeActive: !result && !drained && inspectedPane.pipeActive }) : inspectedPane;
+    ? await drainExitedPane(manager, id, { ...inspectedPane, exitCode: inspectedPane.exitCode ?? shellExit?.exitCode ?? null, pipeActive: !result && !drained && inspectedPane.pipeActive }) : inspectedPane;
   const collector = await collectorState(manager, session, pane);
   // Closing pipe-pane can finish the logger between the preceding reads.
   if (!pane.alive && !drained) drained = await jsonFile(path.join(manager.dir(id), 'log-drained.json'), null);

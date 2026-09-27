@@ -7,7 +7,7 @@ import { atomicJson, jsonFile } from './runtime.mjs';
 // still lets the collector drain queued bytes and publish log-drained.json.
 export async function drainExitedPane(manager, id, pane) {
   const file = path.join(manager.dir(id), 'pane-exit.json');
-  if (!pane.alive && pane.pid && pane.pipeActive && Number.isInteger(pane.exitCode)) {
+  if (!pane.alive && pane.pid && pane.pipeActive) {
     try {
       await manager.run(['if-shell', '-F', '-t', `${id}:0.0`, '#{pane_dead}', `pipe-pane -t '${id}:0.0'`]);
     } catch (error) {
@@ -19,10 +19,10 @@ export async function drainExitedPane(manager, id, pane) {
         throw error;
       }
       const current = await manager.pane(id);
-      if (!current.alive && current.pid && Number.isInteger(current.exitCode)) {
-        await atomicJson(file, { exitCode: current.exitCode });
+      if (!current.alive && current.pid === pane.pid) {
+        await atomicJson(file, { exitCode: current.exitCode ?? pane.exitCode ?? null });
         await manager.run(['if-shell', '-F', '-t', `${id}:0.0`,
-          `#{&&:#{pane_dead},#{==:#{pane_dead_status},${current.exitCode}}}`,
+          `#{&&:#{pane_dead},#{==:#{pane_pid},${current.pid}}}`,
           `kill-pane -t '${id}:0.0'`]).catch(e => {
           if (!/can't find (session|window|pane)|no server running/.test(e.message)) throw e;
         });

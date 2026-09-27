@@ -28,7 +28,7 @@ test('tmux rejecting pipe close on dead panes still drains output and persists t
  const run = t.run.bind(t); let rejected = 0, removed = 0, id;
  t.run = async args => {
   if (args[0] === 'if-shell' && args.some(x => x.startsWith('pipe-pane '))) { rejected++; throw new OperationError('target pane has exited', 'terminal_error'); }
-  if (args.some(x => x.startsWith('kill-pane '))) { assert.match(args[4], /pane_dead_status/); removed++; }
+  if (args.some(x => x.startsWith('kill-pane '))) { assert.match(args[4], /pane_pid/); removed++; }
   return run(args);
  };
  try {
@@ -53,6 +53,28 @@ test('exit and exec report completion only after large final output drains', { t
    assert.match(r.output.content, /0{200000}FINISHED/);
    assert.equal(r.output.truncated, false); assert.equal(r.output.nextCursor, r.outputEndCursor);
    await t.close(id);
+  }
+ } finally { for (const id of ids) await t.close(id).catch(() => {}); await t.run(['kill-server']).catch(() => {}); await f.cleanup(); }
+});
+
+test('dead panes drain even without tmux exit status; shell exit receipts preserve known codes', { timeout: 15000 }, async () => {
+ const f = await fixture(), t = await new TerminalManager({ root: path.join(f.root, 'tmux'), env: f.env }).initialize();
+ const pane = t.pane.bind(t), run = t.run.bind(t); const ids = [];
+ t.pane = async id => { const p = await pane(id); return p.alive ? p : { ...p, exitCode: null }; };
+ t.run = async args => {
+  if (args[0] === 'if-shell' && args.some(x => x.startsWith('pipe-pane '))) throw new OperationError('target pane has exited', 'terminal_error');
+  return run(args);
+ };
+ try {
+  for (const mode of ['exit', 'exec']) {
+   const id = (await t.open({ cwd: f.root })).sessionId; ids.push(id);
+   await t.execute(id, { command: 'printf FIRST', waitMs: 1000 });
+   const command = 'printf LAST_OUTPUT; exit 9';
+   const r = await t.execute(id, { command: mode === 'exit' ? command : `exec /bin/bash -c ${quote(command)}`, waitMs: 3000 });
+   assert.equal(r.status, 'terminal_closed'); assert.equal(r.outputStatus, 'complete');
+   assert.equal(r.exitCode, mode === 'exit' ? 9 : null); assert.match(r.output.content, /LAST_OUTPUT/);
+   const fresh = new TerminalManager({ root: t.root, env: f.env });
+   assert.equal((await fresh.commandStatus(id, r.commandId)).exitCode, r.exitCode);
   }
  } finally { for (const id of ids) await t.close(id).catch(() => {}); await t.run(['kill-server']).catch(() => {}); await f.cleanup(); }
 });

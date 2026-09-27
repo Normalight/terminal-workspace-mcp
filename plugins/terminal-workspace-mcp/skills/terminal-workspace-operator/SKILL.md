@@ -37,7 +37,7 @@ PTY output merges stdout/stderr (`stderr` is empty). It may include ANSI, intera
 
 `cwd` applies only on creation; use `cd -- /absolute/path` in an existing shell. Closed/reclaimed keys can return a replacement shell on a new command; initialize its cwd/environment again. Keep the original `sessionId` to read its old history. tmux tasks survive MCP restarts, but do not survive machine reboot or termination of their tmux server.
 
-Answer prompts using `{sessionId,input:"yes\n"}` or interrupt using `{sessionId,key:"C-c"}`. Send commands and interactive input in separate calls. Preserve `PROMPT_COMMAND`, the `DEBUG` trap and internal tracking variables. Long work should stay in the foreground; a command ending in `&` completes when its shell returns.
+Answer prompts using `{sessionId,input:"yes\n"}` or interrupt using `{sessionId,key:"C-c"}`. Send commands and interactive input in separate calls. Preserve `PROMPT_COMMAND`, the `DEBUG` and `EXIT` tracking traps, and internal tracking variables. Long work should stay in the foreground; a command ending in `&` completes when its shell returns.
 
 New terminals disable automatic pagers. Existing shells may still launch one: prefer `git --no-pager` for status queries. When `interaction.type` is `pager`, inspect the output and deliberately send `{sessionId,input:"q"}` to leave it when finished reading. Polling cannot dismiss a pager; do not confuse it with a completed command or retry the command.
 
