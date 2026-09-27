@@ -7,6 +7,8 @@
     "path": "/mcp",
     "allowedHosts": [],
     "allowAnonymous": false,
+    "maxToolWaitMs": 5000,
+    "closeFiniteConnections": true,
     "compression": {
       "enabled": true,
       "minBytes": 1024

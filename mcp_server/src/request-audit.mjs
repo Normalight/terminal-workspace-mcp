@@ -10,8 +10,8 @@ function metadata(value = {}) {
   for (const name of ['status', 'executionStatus', 'outputStatus', 'nextAction']) {
     if (typeof value[name] === 'string' && /^[a-z_]{1,40}$/.test(value[name])) fields[name === 'status' ? 'taskStatus' : name] = value[name];
   }
-  for (const name of ['exitCode', 'nextCursor', 'outputEndCursor']) if (Number.isSafeInteger(value[name])) fields[name] = value[name];
-  for (const name of ['outputRead', 'outputGap', 'outputComplete', 'outputTruncated']) if (typeof value[name] === 'boolean') fields[name] = value[name];
+  for (const name of ['exitCode', 'nextCursor', 'outputEndCursor', 'requestedWaitMs', 'effectiveWaitMs']) if (Number.isSafeInteger(value[name])) fields[name] = value[name];
+  for (const name of ['outputRead', 'outputGap', 'outputComplete', 'outputTruncated', 'waitLimited']) if (typeof value[name] === 'boolean') fields[name] = value[name];
   return fields;
 }
 

@@ -20,7 +20,7 @@ Save `sessionId`, `commandId`, `nextCursor`, and artifact paths. The key locates
 While `status` is `starting` or `running`, poll without `command`:
 
 ```json
-{"sessionId":"term_...","commandId":"cmd_...","cursor":1234,"waitMs":10000,"maxBytes":65536}
+{"sessionId":"term_...","commandId":"cmd_...","cursor":1234,"waitMs":5000,"maxBytes":65536}
 ```
 
 Use the previous `nextCursor`. Follow `nextAction`: `poll` for active work, `read_output` for remaining pages, `input` for confirmed terminal input, `inspect` for uncertainty or missing output, and `done` to stop polling. A final status ends execution; drain remaining pages and report gaps, which do not disappear by polling. Check `status`, `exitCode`, `outputGap` and `outputComplete` before reporting success and complete output. TextContent and structuredContent both carry the full bounded result.
@@ -53,3 +53,6 @@ Multiple MCP clients may call concurrently and read with independent cursors. Ke
 For long output, consume pages while the command runs and persist each nextCursor; do not wait until completion before draining logs that may rotate. The SDK's awaited onPage callback supports output consumption and checkpoint persistence. A failed consumer stops at its last acknowledged cursor. A replayed output page after a crash does not authorize replaying a command.
 
 For status checks without logs, send statusOnly:true with a saved commandId. Such replies have outputRead:false and no nextCursor; retain your existing cursor, then fetch output on read_output. Record requestId when reporting a stuck call so the operator can correlate tool_result and HTTP delivery. interactionHint is uncertain I/O evidence, not permission to send input or cancel. Inspect the prompt before interacting; a silent task can still be working.
+
+
+HTTP waiting defaults to a server-side five-second cap. When waitLimited is true, effectiveWaitMs reports the shorter wait; it does not mean the command timed out or failed. Continue reading the saved command/cursor. Finite TCP closure also does not close an MCP session or terminal. A browser stream-recovery error requires request-specific correlation and is not proof of failed execution.

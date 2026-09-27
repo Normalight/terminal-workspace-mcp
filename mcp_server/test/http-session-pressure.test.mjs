@@ -18,6 +18,9 @@ test('160 fresh-client calls reclaim idle MCP sessions while preserving listener
   await new Promise(r => socket.close(r));
   const base = `http://127.0.0.1:${port}`, token = 'synthetic-session-pressure';
   const env = { ...f.env, MCP_NO_HTTP: '0', MCP_ALLOW_ANONYMOUS: '0', MCP_AUTH_TOKEN: token, MCP_HOST: '127.0.0.1', MCP_PORT: String(port),
+    // Keep this request in flight throughout admission pressure. The default
+    // short HTTP wait and session reuse are covered by tool-wait-policy.test.
+    MCP_HTTP_MAX_TOOL_WAIT_MS: '30000',
     MCP_MAX_SESSIONS: '4', MCP_SESSION_PRESSURE_IDLE_MS: '0', MCP_TOOL_PROFILE: 'minimal', MCP_ENABLE_TERMINAL: '1',
     MCP_WORKSPACE_ROOT: f.root, MCP_JOB_ROOT: path.join(f.root, 'jobs'), MCP_TERMINAL_ROOT: path.join(f.root, 'terminals'), MCP_HTTP_AUDIT_LOG: path.join(f.root, 'audit.jsonl') };
   const proc = spawn(process.execPath, [path.join(workspaceRoot, 'mcp_server/src/server.mjs')], { cwd: workspaceRoot, env, stdio: ['ignore', 'ignore', 'pipe'] });

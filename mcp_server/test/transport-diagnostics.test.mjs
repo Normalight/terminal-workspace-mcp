@@ -31,6 +31,18 @@ assert summary['requests']=={'POST tools/call 200':1}
 assert summary['retainedFrom']=='2026-09-26T15:00:00+00:00'
 assert summary['recentMetadata'][0]['durationMs']==30000
 assert 'private-' not in json.dumps(summary)
+transport=root/'tunnel.stdout.log'
+transport.write_text('\\n'.join(json.dumps(r) for r in [
+ {'time':'2026-09-26T15:05:00Z','level':'WARN','msg':'dispatcher received MCP upstream error; posted error response to control plane','rpc_method':'initialize','status_code':502,'transport_error_kind':'connection_reset','upstream_response_received':False,'authorization':'private-token'},
+ {'time':'2026-09-26T15:06:00Z','level':'WARN','msg':'private-command','error':'private-token'},
+ {'time':'2026-09-26T15:07:00Z','level':'WARN','msg':'poll timed out; backing off'}
+])+'\\n')
+summary=d['tunnel_log_summary'](transport,until=d['utc_time']('2026-09-26T15:06:30Z'))
+assert summary['matchingRecords']==2
+assert summary['recentEvents'][0]['transport_error_kind']=='connection_reset'
+assert summary['recentEvents'][0]['upstream_response_received'] is False
+assert summary['recentEvents'][1]['event']=='other_transport_warning'
+assert 'private-' not in json.dumps(summary)
 cid='cmd_'+'a'*36
 base.write_text('\\n'.join(json.dumps(r) for r in [
  {'timestamp':'2026-09-26T15:04:00Z','event':'tool_started','requestId':'correlated','toolName':'execute_command'},

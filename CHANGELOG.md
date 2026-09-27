@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.4 — 2026-09-27
+
+- Cap HTTP execution/output waiting at a configurable five seconds even when a caller uses a cached schema and requests thirty seconds. Return requested/effective wait metadata without stopping or replaying the task.
+- Explicitly close finite MCP HTTP connections by default while retaining MCP session identity and leaving notification SSE open; deployments can opt back into TCP keep-alive.
+- Include bounded, allowlisted tunnel error events in incident diagnostics so connection failures before MCP dispatch are visible alongside origin audit records.
+
 ## 0.5.3 — 2026-09-27
 
 - Stream bounded output pages through an awaited SDK consumer and advance checkpoints only after consumption; status-only waits avoid retransmitting logs.

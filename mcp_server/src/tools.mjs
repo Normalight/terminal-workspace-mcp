@@ -2,6 +2,7 @@ import { z } from "zod";
 import { executeTerminalCall, terminalDescription } from "./terminal-tool.mjs";
 import { OperationError, quote } from "./runtime.mjs";
 import { registerAuditedTool, requestAudit } from './request-audit.mjs';
+import { toolWait } from './tool-wait-policy.mjs';
 
 const readOnly = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
 const modifying = { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: false };
@@ -81,7 +82,7 @@ export function registerTools(server, { workspace: w, executor, jobs, terminals:
   register("write_file", "Create, replace, or append UTF-8 text using account permissions. Supports atomic replacement and a whole-file expectedSha256 conflict check.", { path: string, content: string, mode: z.enum(["create", "overwrite", "append"]).default("overwrite"), expectedSha256: string.regex(/^[a-f0-9]{64}$/).optional() }, a => w.writeText(a.path, a.content, a), modifying);
   register("replace_in_file", "Replace exact text with serialized conflict checking and optional dry-run preview.", { path: string, find: string.min(1), replace: string, maxReplacements: z.number().int().min(1).max(1000).default(1), dryRun: z.boolean().default(true), expectedSha256: string.regex(/^[a-f0-9]{64}$/).optional() }, a => w.replaceText(a.path, a.find, a.replace, a), modifying);
   const input = { notifyOnCompletion, command: string.min(1).max(20000), cwd: string.default("."), timeoutMs: z.number().int().min(0).max(120000).default(30000), waitMs: z.number().int().min(0).max(120000).optional(), executionTimeoutMs: z.number().int().min(0).max(2147483647).default(0), maxOutputBytes: z.number().int().min(1024).max(2097152).default(262144) };
-  const execute = terminal(async (a, tool) => { const target = await cwd(a.cwd); return executor.execute({ ...a, cwd: target.absolute, cwdLabel: target.relative, tool, env: config.childEnv, signal: config.waitSignal }); });
+  const execute = terminal(async (a, tool) => { const target = await cwd(a.cwd), wait = toolWait(a, { legacy: true }); return { ...await executor.execute({ ...wait.args, cwd: target.absolute, cwdLabel: target.relative, tool, env: config.childEnv, signal: config.waitSignal }), ...wait.metadata }; });
   for (const name of ["execute_command", "run_terminal"]) register(name, "Execute a command as a durable job. timeoutMs/waitMs only bound this call's wait; output truncation never stops execution. Returns jobId and cursors. Set executionTimeoutMs for an explicit process deadline. Use tmux terminal tools for interactive state.", input, a => execute(a, name), modifying);
   register("execute_readonly_command", "Execute a fixed read-only query (pwd/ls/cat/uname/id/whoami or limited git queries). Use execute_command for general shell commands.", input, a => execute({ ...a, command: readonlyCommand(a.command) }, "execute_readonly_command"));
   register("git_status", "Read Git status in an accessible repository.", { cwd: string.default(".") }, async a => {
@@ -98,10 +99,10 @@ export function registerTools(server, { workspace: w, executor, jobs, terminals:
   register("cleanup_jobs", "Remove completed job histories according to age/count retention. Running jobs are preserved. dryRun previews the selection.", { retainCount: z.number().int().min(0).max(100000).default(1000), dryRun: z.boolean().default(true) }, terminal(a => jobs.cleanup(a)), modifying);
   register("open_terminal", "Create a persistent tmux Bash PTY or resume an existing sessionId. State survives MCP service restarts. env extends the server environment for the new session.", { sessionId: sessionId.optional(), terminalKey, cwd: string.default("."), name: string.max(200).default(""), env: z.record(string, string).default({}), cols: z.number().int().min(20).max(500).default(120), rows: z.number().int().min(5).max(300).default(40) }, terminal(async a => t.open({ ...a, resolveCwd: async () => (await cwd(a.cwd)).absolute })), modifying);
   register("list_terminals", "List managed tmux terminal sessions with their current directories.", {}, async () => ({ terminals: await t.list() }));
-  register("execute_in_terminal", "Run a tracked command in an existing tmux shell, preserving cd/export/activation. Returns commandId, status, exit code, and output cursor. Use write_terminal to answer prompts.", { sessionId, notifyOnCompletion, command: input.command, waitMs: z.number().int().min(0).max(30000).default(1000), maxBytes }, terminal(a => t.execute(a.sessionId, { ...a, signal: config.waitSignal })), modifying);
+  register("execute_in_terminal", "Run a tracked command in an existing tmux shell, preserving cd/export/activation. Returns commandId, status, exit code, and output cursor. Use write_terminal to answer prompts.", { sessionId, notifyOnCompletion, command: input.command, waitMs: z.number().int().min(0).max(30000).default(1000), maxBytes }, terminal(async a => { const wait = toolWait(a); return { ...await t.execute(a.sessionId, { ...wait.args, signal: config.waitSignal }), ...wait.metadata }; }), modifying);
   register("get_terminal_command", "Read completion and exit code for a tracked terminal command. Set notifyOnCompletion=true to subscribe on this connection.", { sessionId, commandId, notifyOnCompletion }, a => t.commandStatus(a.sessionId, a.commandId));
   register("write_terminal", "Send literal input and optional Enter, or a control key such as C-c. Does not open another shell.", { sessionId, input: string.max(65536).default(""), enter: z.boolean().default(false), key: z.enum(["C-c", "C-d", "C-z", "Enter", "Escape", "Tab", "Up", "Down"]).optional() }, terminal(a => t.write(a.sessionId, a)), modifying);
-  register("read_terminal", "Read original PTY output incrementally using nextCursor. Output may contain terminal ANSI sequences.", { sessionId, cursor: z.number().int().min(0).optional(), maxBytes, waitMs: z.number().int().min(0).max(30000).default(0) }, a => t.read(a.sessionId, { ...a, signal: config.waitSignal }));
+  register("read_terminal", "Read original PTY output incrementally using nextCursor. Output may contain terminal ANSI sequences.", { sessionId, cursor: z.number().int().min(0).optional(), maxBytes, waitMs: z.number().int().min(0).max(30000).default(0) }, async a => { const wait = toolWait(a); return { ...await t.read(a.sessionId, { ...wait.args, signal: config.waitSignal }), ...wait.metadata }; });
   register("resize_terminal", "Resize the terminal PTY.", { sessionId, cols: z.number().int().min(20).max(500), rows: z.number().int().min(5).max(300) }, terminal(a => t.resize(a.sessionId, a.cols, a.rows)), modifying);
   register("close_terminal", "Close a managed tmux session and its shell. Logs remain available.", { sessionId }, terminal(a => t.close(a.sessionId)), modifying);
   register("server_diagnostics", "Show build revision, operation modes, limits, tool count, sessions and job summary.", {}, diagnostics);
@@ -119,7 +120,8 @@ export function registerTools(server, { workspace: w, executor, jobs, terminals:
   }, async (a) => {
     try {
       if (!config.enableTerminal) throw new OperationError("set MCP_ENABLE_TERMINAL=1 to enable execution", "terminal_disabled");
-      const value = await executeTerminalCall(t, { ...a, signal: config.waitSignal }, async value => (await cwd(value)).absolute);
+      const wait = toolWait(a);
+      const value = { ...await executeTerminalCall(t, { ...wait.args, signal: config.waitSignal }, async value => (await cwd(value)).absolute), ...wait.metadata };
       if (config.waitSignal?.aborted) value.serverRestarting = true;
       return result(completions ? completions.observe(value, a.notifyOnCompletion, !!a.command?.trim()) : value);
     } catch (error) { return errorResult(error); }

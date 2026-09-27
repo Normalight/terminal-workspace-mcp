@@ -10,6 +10,7 @@ const httpUrl = text.refine(value => { try { return ['http:', 'https:'].includes
 const schema = z.object({
   version: z.literal(1), workspaceRoot: text,
   http: z.object({ host: text, port: count(1, 65535), path: text.regex(/^\/[^?#\s]*$/), allowedHosts: z.array(text), allowAnonymous: z.boolean(),
+    maxToolWaitMs: count(0, 30000), closeFiniteConnections: z.boolean(),
     compression: z.object({ enabled: z.boolean(), minBytes: count(0, 1048576) }).strict(),
     sessions: z.object({ max: count(1, 10000), idleTtlMs: count(60000, 2147483647), gcIntervalMs: count(10000, 2147483647), pressureIdleMs: count(0, 2147483647) }).strict(),
   }).strict(),
@@ -28,6 +29,8 @@ const schema = z.object({
 const bindings = {
   MCP_WORKSPACE_ROOT: ['workspaceRoot', 'string'], MCP_HOST: ['http.host', 'string'], MCP_PORT: ['http.port', 'number'], MCP_PATH: ['http.path', 'string'],
   MCP_ALLOWED_HOSTS: ['http.allowedHosts', 'list'], MCP_ALLOW_ANONYMOUS: ['http.allowAnonymous', 'boolean'],
+  MCP_HTTP_MAX_TOOL_WAIT_MS: ['http.maxToolWaitMs', 'number'],
+  MCP_HTTP_CLOSE_FINITE_CONNECTIONS: ['http.closeFiniteConnections', 'boolean'],
   MCP_HTTP_COMPRESSION: ['http.compression.enabled', 'boolean'], MCP_HTTP_COMPRESSION_MIN_BYTES: ['http.compression.minBytes', 'number'],
   MCP_MAX_SESSIONS: ['http.sessions.max', 'number'], MCP_SESSION_IDLE_TTL_MS: ['http.sessions.idleTtlMs', 'number'], MCP_SESSION_GC_INTERVAL_MS: ['http.sessions.gcIntervalMs', 'number'],
   MCP_SESSION_PRESSURE_IDLE_MS: ['http.sessions.pressureIdleMs', 'number'],

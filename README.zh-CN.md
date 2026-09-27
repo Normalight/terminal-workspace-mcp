@@ -83,7 +83,7 @@ python3 -B mcp_server/scripts/services.py status --component all
 
 `notifyOnCompletion:false` 取消该命令的通知；重连新 MCP 会话后传 `{sessionId, commandId, notifyOnCompletion:true, waitMs:0}` 重新订阅，已完成的任务也会补发状态。运行结果持久保存，通知订阅随 MCP 连接管理。短时 GET 断线期间保留待发通知；服务重启后需重新订阅。任务应在前台执行，命令末尾的 `&` 只表示 shell 已完成启动后台进程。
 
-调用方必须处理通知，并允许 `notice` 级日志；服务端无法单方面让客户端或模型自动开始下一轮。不支持事件的客户端继续使用 `sessionId` 和 `nextCursor` 轮询，`waitMs:10000` 至 `30000`。等待到期或连接中断不等于任务失败，不要直接重跑。详见[接入机制与限制](mcp_server/README.md#long-tasks)和[可运行的调用方示例](mcp_server/examples/completion-client.mjs)。
+调用方必须处理通知，并允许 `notice` 级日志；服务端无法单方面让客户端或模型自动开始下一轮。不支持事件的客户端继续使用 `sessionId` 和 `nextCursor` 轮询，`waitMs:5000`。等待到期或连接中断不等于任务失败，不要直接重跑。详见[接入机制与限制](mcp_server/README.md#long-tasks)和[可运行的调用方示例](mcp_server/examples/completion-client.mjs)。
 
 普通工具调用返回有限 JSON 响应；接收事件使用一条持续的 GET SSE。客户端应初始化一次，重复使用 HTTP 请求头 `Mcp-Session-Id`，它与工具参数中的终端 `sessionId` 是两层不同的标识。同一 MCP 会话复用一条 SSE 接收多个任务事件，同一任务的重复订阅会去重。返回的 `completionNotification.listening` 表明当时是否存在监听连接；仅 `subscribed:true` 不代表调用方正在接收事件。
 
@@ -126,3 +126,8 @@ node mcp_server/scripts/measure_tools.mjs
 `statusOnly:true` 要求固定 `commandId`，返回 `outputRead:false`，不携带 stdout 或推进游标；结束后按 `read_output` 获取剩余输出。输入等待可确认时返回 `interaction`；内核限制下仅提供 `interactionHint`，不会因正常 I/O 等待或长时间无输出而自动中止任务。
 
 结果中的 `requestId` 可关联 HTTP 审计与 `tool_started/tool_result`；诊断脚本新增 `--command-id`。日志只保留任务标识、状态、动作、耗时等元数据。持续并发测试入口为 `node mcp_server/scripts/soak_terminal.mjs 600000 6`，使用隔离服务，覆盖通知缺失、读请求故障、重启、日志轮转和完整结束；不代表网页或 24 小时稳定性验收。
+
+
+HTTP 单次主动等待默认最多 5 秒，即使旧对话仍传入 30 秒，也会返回原任务状态与游标，标注 `requestedWaitMs/effectiveWaitMs/waitLimited`。这不会限制命令执行时长；初始化、文件系统等开销不属于等待预算。可通过 `http.maxToolWaitMs` 配置。
+
+有限 HTTP 响应默认明确关闭 TCP 连接，避免复用临近过期的空闲连接；MCP 会话仍可在新连接复用，SSE 通知保持开启。`http.closeFiniteConnections` 可配置。两项措施是传输风险缓解，不保证修复 ChatGPT 网页内部的 stream recovery 报错。

@@ -62,7 +62,7 @@ const terminalGcTimer = setInterval(async () => {
 terminalGcTimer.unref();
 let revision = "unknown";
 try { revision = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8", timeout: 2000 }).trim(); } catch {}
-const version = "0.5.3";
+const version = "0.5.4";
 const maxSessions = settings.http.sessions.max;
 let toolCount = 0;
 const startedAt = Date.now();
@@ -165,8 +165,11 @@ async function readBody(req) {
 
 async function handleMcp(req, res) {
   if (req.method !== 'GET') lifecycle.track(res);
+  // Finite RPCs can preserve MCP sessions without reusing an idle TCP socket.
+  // SSE GET stays open. Explicit closure avoids stale keep-alive reuse by relays.
+  if (req.method !== 'GET' && settings.http.closeFiniteConnections) res.setHeader('connection', 'close');
   const requestId = randomUUID();
-  const auditContext = { requestId, emit: entry => { void auditHttp(entry); }, tool: {} };
+  const auditContext = { requestId, maxToolWaitMs: settings.http.maxToolWaitMs, emit: entry => { void auditHttp(entry); }, tool: {} };
   res.setHeader('x-request-id', requestId);
   const began = Date.now();
   runtimeCounters.httpRequests += 1;
@@ -347,6 +350,7 @@ if (!noHttp) {
         version, revision, toolCount, toolProfile,
         compression: compressionConfig,
         httpSessions: settings.http.sessions,
+        httpResponsePolicy: { maxToolWaitMs: settings.http.maxToolWaitMs, closeFiniteConnections: settings.http.closeFiniteConnections },
         configFile: deployment.configFile,
         workspace: workspace.root,
         writesEnabled: enableWrite,

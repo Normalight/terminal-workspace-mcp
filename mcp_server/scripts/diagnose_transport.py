@@ -29,7 +29,8 @@ def audit_summary(log, since=None, until=None, command_id=None):
               'statusCode', 'durationMs', 'requestBytes', 'responseBytes', 'responseFinished',
               'taskSessionId', 'commandId', 'taskStatus', 'executionStatus', 'outputStatus', 'nextAction',
               'exitCode', 'nextCursor', 'outputEndCursor', 'outputRead', 'outputGap', 'outputComplete',
-              'outputTruncated', 'callKind', 'toolError', 'errorCode', 'toolDurationMs']
+              'outputTruncated', 'callKind', 'toolError', 'errorCode', 'toolDurationMs',
+              'requestedWaitMs', 'effectiveWaitMs', 'waitLimited']
     for file in files:
         try:
             with file.open(errors='replace') as source:
@@ -81,6 +82,31 @@ def request_counts(metrics):
         counts[key] += row['value']
     return dict(counts)
 
+def tunnel_log_summary(log, since=None, until=None):
+    """Retained transport failures can precede any origin HTTP audit entry."""
+    messages = {
+        'dispatcher received MCP upstream error; posted error response to control plane',
+        'poll failed; backing off', 'poll timed out; backing off',
+        'control-plane proxy closed long poll; lowering future poll timeout',
+    }
+    fields = ['level', 'rpc_method', 'status_code', 'failure_source',
+              'transport_error_kind', 'upstream_response_received', 'tunnel_client_version']
+    rows = []
+    files = sorted(p for p in log.parent.glob(log.name + '*') if p.name == log.name or re.fullmatch(re.escape(log.name) + r'\.\d{9}', p.name))
+    for file in files:
+        try:
+            with file.open(errors='replace') as source:
+                for line in source:
+                    try:
+                        row = json.loads(line); time = utc_time(row['time'])
+                    except (ValueError, KeyError, TypeError): continue
+                    if row.get('level') not in ['WARN', 'ERROR'] or (since and time < since) or (until and time > until): continue
+                    rows.append({'timestamp': time.isoformat(), 'event': row.get('msg') if row.get('msg') in messages else 'other_transport_warning',
+                                 **{k: row[k] for k in fields if k in row}})
+        except FileNotFoundError: continue
+    rows.sort(key=lambda r: r['timestamp'])
+    return {'scope': 'retained tunnel warnings/errors; separate from browser stream recovery', 'matchingRecords': len(rows), 'recentEvents': rows[-50:]}
+
 def fetch(url):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
@@ -117,6 +143,7 @@ def snapshot(out, loaded, since=None, until=None, command_id=None):
             metrics.append({'name':name,'labels':labels,'value':float(value)})
     data['metrics'] = metrics
     data['httpAudit'] = audit_summary(Path(loaded['config']['paths']['audit']), since, until, command_id)
+    data['tunnelEvents'] = tunnel_log_summary(Path(loaded['config']['paths']['service'])/'tunnel.stdout.log', since, until)
     log = Path(loaded['config']['paths']['service'])/'server.stderr.log'
     if log.is_file():
         lines=log.read_text(errors='replace').splitlines();events=[]

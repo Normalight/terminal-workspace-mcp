@@ -17,14 +17,14 @@ test('config derives runtime paths and relay targets, validates overrides, and i
  try{
   await writeFile(file,JSON.stringify({workspaceRoot:'.',http:{host:'0.0.0.0',port:23456},auth:{tokenEnv:'TEST_CONFIG_TOKEN',token:'synthetic-file-value'},client:{url:'https://example.test/custom',tokenEnv:'CLIENT_TOKEN'}}));
   const loaded=loadConfig({file,env:{TEST_CONFIG_TOKEN:'synthetic-env-value'}});
-  assert.equal(loaded.config.http.sessions.idleTtlMs,120000);assert.equal(loaded.config.http.sessions.gcIntervalMs,10000);assert.equal(loaded.config.http.sessions.pressureIdleMs,5000);
+  assert.equal(loaded.config.http.maxToolWaitMs,5000);assert.equal(loaded.config.http.sessions.idleTtlMs,120000);assert.equal(loaded.config.http.sessions.gcIntervalMs,10000);assert.equal(loaded.config.http.sessions.pressureIdleMs,5000);
   assert.equal(loaded.config.workspaceRoot,f.root);assert.equal(loaded.config.paths.terminals,path.join(f.root,'outputs/mcp-terminals'));
   assert.equal(loaded.config.relay.targetHost,'127.0.0.1');assert.equal(loaded.config.relay.targetPort,23456);
   assert.equal(loaded.healthOrigin,'http://127.0.0.1:23456');assert.equal(loaded.env.MCP_AUTH_TOKEN,'synthetic-env-value');assert(!JSON.stringify(loaded.config).includes('synthetic-'));
   assert.equal(pluginConnection(loaded.config).mcpServers['terminal-workspace'].url,'https://example.test/custom');
   const override=loadConfig({file,env:{MCP_PORT:'23457',MCP_ENABLE_TERMINAL:'0',MCP_AUTH_TOKEN:'synthetic-explicit'}});
   assert.equal(override.config.http.port,23457);assert.equal(override.config.relay.targetPort,23457);assert(!override.config.tools.enableTerminal);assert.equal(override.env.MCP_AUTH_TOKEN,'synthetic-explicit');
-  for(const env of [{MCP_PORT:'5679oops'},{MCP_ENABLE_TERMINAL:'false'},{MCP_TOOL_PROFILE:'invalid'}])assert.throws(()=>loadConfig({file,env}),/Invalid configuration|must be/);
+  for(const env of [{MCP_HTTP_MAX_TOOL_WAIT_MS:'30001'},{MCP_PORT:'5679oops'},{MCP_ENABLE_TERMINAL:'false'},{MCP_TOOL_PROFILE:'invalid'}])assert.throws(()=>loadConfig({file,env}),/Invalid configuration|must be/);
   await writeFile(file,JSON.stringify({workspaceRoot:'.',http:{porrt:1234}}));assert.throws(()=>loadConfig({file,env:{}}),/porrt/);
   await mkdir(path.join(f.root,'work'));await symlink(f.root,path.join(f.root,'work','escape'));
   await writeFile(file,JSON.stringify({workspaceRoot:'work',paths:{jobs:'escape/jobs'}}));assert.throws(()=>loadConfig({file,env:{}}),/inside workspaceRoot/);
