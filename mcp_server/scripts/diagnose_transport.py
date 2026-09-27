@@ -12,6 +12,9 @@ def redact(text):
 
 def utc_time(value):
     try:
+        # Go tunnel logs use nanoseconds; Python 3.10 fromisoformat accepts
+        # at most microseconds. Truncate only fractional seconds, not offsets.
+        value = re.sub(r'(T\d{2}:\d{2}:\d{2}\.\d{6})\d+', r'\1', value)
         result = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
         if result.tzinfo is None: raise ValueError('timezone required')
         return result.astimezone(datetime.timezone.utc)
